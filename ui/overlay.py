@@ -14,14 +14,15 @@ from __future__ import annotations
 from PySide6.QtCore import QPoint, QRect, Qt, Signal
 from PySide6.QtGui import (
     QColor,
-    QPaintEvent,
     QFont,
     QGuiApplication,
     QImage,
     QKeyEvent,
     QMouseEvent,
     QPainter,
+    QPaintEvent,
     QPen,
+    QPixmap,
 )
 from PySide6.QtWidgets import QWidget
 
@@ -55,6 +56,11 @@ class RegionOverlay(QWidget):
         self._current = QPoint()
         self._selecting = False
         self._finished = False
+        # Подготовленное изображение экрана в размере окна. Готовится
+        # однократно: масштабирование на каждую перерисовку заметно
+        # замедляло бы выделение области на слабом оборудовании и при
+        # больших разрешениях.
+        self._background = QPixmap()
 
         # Окно без рамки, поверх всех прочих и вне управления менеджером окон:
         # только так оверлей перекрывает панели и всплывающие подсказки.
@@ -68,8 +74,24 @@ class RegionOverlay(QWidget):
         self.setMouseTracking(True)
         self.setGeometry(virtual_rect)
 
+    def _prepare_background(self) -> None:
+        """Подготовка изображения экрана к быстрой отрисовке."""
+        if not self._background.isNull():
+            return
+        pixmap = QPixmap.fromImage(self._desktop)
+        if pixmap.size() != self.size():
+            # Снимок хранится в физических пикселях: при масштабировании
+            # экрана его размер отличается от размера окна.
+            pixmap = pixmap.scaled(
+                self.size(),
+                Qt.AspectRatioMode.IgnoreAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
+            )
+        self._background = pixmap
+
     def show_overlay(self) -> None:
         """Показ оверлея с захватом ввода."""
+        self._prepare_background()
         self.show()
         self.raise_()
         self.activateWindow()
@@ -81,42 +103,45 @@ class RegionOverlay(QWidget):
 
     def paintEvent(self, event: QPaintEvent) -> None:  # noqa: N802 - имя из Qt
         """Отрисовка снимка, затемнения и текущей рамки выделения."""
+        self._prepare_background()
         painter = QPainter(self)
         target = self.rect()
-        # Снимок хранится в физических пикселях и растягивается на
-        # логический размер окна: масштабирование выполняет Qt.
-        painter.drawImage(target, self._desktop)
+        # Изображение уже приведено к размеру окна, поэтому вывод сводится
+        # к простому переносу точек без пересчёта.
+        painter.drawPixmap(0, 0, self._background)
 
         selection = self._selection_rect()
-        painter.fillRect(target, QColor(0, 0, 0, DIM_ALPHA))
 
         # Рамка показывается только во время протягивания: до первого
         # нажатия прямоугольник вырожден и вместо него выводится подсказка.
         if self._selecting and selection.width() > 1 and selection.height() > 1:
-            # Выбранная область возвращается к исходной яркости.
-            source = QRect(
-                int(selection.x() * self._scale_x()),
-                int(selection.y() * self._scale_y()),
-                int(selection.width() * self._scale_x()),
-                int(selection.height() * self._scale_y()),
+            # Затемняются только полосы вокруг выбранной области: заливка
+            # всего экрана с последующим восстановлением яркости требует
+            # двух проходов по всем точкам вместо одного.
+            dim = QColor(0, 0, 0, DIM_ALPHA)
+            painter.fillRect(QRect(0, 0, target.width(), selection.top()), dim)
+            painter.fillRect(
+                QRect(0, selection.bottom() + 1, target.width(),
+                      target.height() - selection.bottom() - 1),
+                dim,
             )
-            painter.drawImage(selection, self._desktop, source)
+            painter.fillRect(
+                QRect(0, selection.top(), selection.left(), selection.height()), dim
+            )
+            painter.fillRect(
+                QRect(selection.right() + 1, selection.top(),
+                      target.width() - selection.right() - 1, selection.height()),
+                dim,
+            )
 
             pen = QPen(QColor(64, 160, 255), 1)
             painter.setPen(pen)
             painter.drawRect(selection.adjusted(0, 0, -1, -1))
             self._draw_size_label(painter, selection)
         else:
+            painter.fillRect(target, QColor(0, 0, 0, DIM_ALPHA))
             self._draw_hint(painter)
         painter.end()
-
-    def _scale_x(self) -> float:
-        """Коэффициент перевода логической ширины в пиксели снимка."""
-        return self._desktop.width() / max(1, self.width())
-
-    def _scale_y(self) -> float:
-        """Коэффициент перевода логической высоты в пиксели снимка."""
-        return self._desktop.height() / max(1, self.height())
 
     def _draw_size_label(self, painter: QPainter, selection: QRect) -> None:
         """Подпись с размерами области рядом с рамкой выделения."""
@@ -180,9 +205,14 @@ class RegionOverlay(QWidget):
 
     def mouseMoveEvent(self, event: QMouseEvent) -> None:  # noqa: N802
         """Изменение размеров выделяемой области."""
-        if self._selecting:
-            self._current = event.position().toPoint()
-            self.update()
+        if not self._selecting:
+            return
+        previous = self._selection_rect()
+        self._current = event.position().toPoint()
+        # Перерисовывается только затронутая часть окна: прежняя и новая
+        # области вместе с запасом под рамку и подпись размера.
+        region = previous.united(self._selection_rect())
+        self.update(region.adjusted(-80, -40, 80, 40))
 
     def mouseReleaseEvent(self, event: QMouseEvent) -> None:  # noqa: N802
         """Завершение выделения."""

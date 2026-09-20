@@ -11,4 +11,5 @@ __pycache__/
 # Сборка единого исполняемого файла
 build/
 dist/
+dist-*/
 vendor/

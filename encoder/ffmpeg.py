@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import os
 import re
+import json
 import shutil
 import subprocess
 from dataclasses import dataclass
@@ -332,7 +333,70 @@ def parse_filters(text: str) -> frozenset[str]:
     return frozenset(names)
 
 
-def probe_capabilities(ffmpeg_path: str | None = None) -> FFmpegCapabilities:
+def _cache_file() -> Path:
+    """Путь файла с сохранёнными сведениями о сборке FFmpeg."""
+    base = os.environ.get("XDG_CACHE_HOME") or str(Path.home() / ".cache")
+    return Path(base) / "linscreen" / "ffmpeg-capabilities.json"
+
+
+def _binary_signature(path: str) -> str:
+    """
+    Отличительный признак бинарника: путь, размер и время правки.
+
+    Смена версии FFmpeg меняет признак, и сохранённые сведения перестают
+    применяться, поэтому устаревшими они не станут.
+    """
+    try:
+        stat = Path(path).stat()
+    except OSError:
+        return path
+    return f"{path}:{stat.st_size}:{int(stat.st_mtime)}"
+
+
+def _load_cached(path: str) -> FFmpegCapabilities | None:
+    """Чтение ранее сохранённых сведений о возможностях сборки."""
+    try:
+        data = json.loads(_cache_file().read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(data, dict) or data.get("signature") != _binary_signature(path):
+        return None
+    try:
+        return FFmpegCapabilities(
+            path=data["path"],
+            version=data["version"],
+            encoders=frozenset(data["encoders"]),
+            muxers=frozenset(data["muxers"]),
+            demuxers=frozenset(data["demuxers"]),
+            filters=frozenset(data["filters"]),
+        )
+    except (KeyError, TypeError):
+        return None
+
+
+def _store_cached(capabilities: FFmpegCapabilities) -> None:
+    """Сохранение сведений о возможностях сборки для следующих запусков."""
+    payload = {
+        "signature": _binary_signature(capabilities.path),
+        "path": capabilities.path,
+        "version": capabilities.version,
+        **{
+            name: sorted(getattr(capabilities, name))
+            for name in ("encoders", "muxers", "demuxers", "filters")
+        },
+    }
+    try:
+        target = _cache_file()
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(json.dumps(payload), encoding="utf-8")
+    except OSError:
+        # Кеш лишь ускоряет запуск: невозможность записи не мешает работе.
+        pass
+
+
+def probe_capabilities(
+    ffmpeg_path: str | None = None, use_cache: bool = True
+) -> FFmpegCapabilities:
     """
     Сбор сведений о возможностях сборки FFmpeg.
 
@@ -341,6 +405,15 @@ def probe_capabilities(ffmpeg_path: str | None = None) -> FFmpegCapabilities:
     эту функцию в пуле и возвращает результат сигналом.
     """
     binary = ffmpeg_path or find_ffmpeg()
+
+    # Опрос запускает бинарник пять раз. Для вложенной сборки размером в
+    # сотню мегабайт это заметная задержка при каждом старте, поэтому
+    # результат сохраняется и переиспользуется до смены версии FFmpeg.
+    if use_cache:
+        cached = _load_cached(binary)
+        if cached is not None:
+            return cached
+
     base = [binary, "-hide_banner"]
 
     version_text = _run_probe([*base, "-version"])
@@ -350,7 +423,7 @@ def probe_capabilities(ffmpeg_path: str | None = None) -> FFmpegCapabilities:
     demuxer_text = _run_probe([*base, "-demuxers"])
     device_text = _run_probe([*base, "-devices"])
 
-    return FFmpegCapabilities(
+    capabilities = FFmpegCapabilities(
         path=binary,
         version=parse_version(version_text),
         encoders=parse_encoders(_run_probe([*base, "-encoders"])),
@@ -358,6 +431,9 @@ def probe_capabilities(ffmpeg_path: str | None = None) -> FFmpegCapabilities:
         demuxers=parse_demuxers(demuxer_text) | parse_demuxers(device_text),
         filters=parse_filters(_run_probe([*base, "-filters"])),
     )
+    if use_cache:
+        _store_cached(capabilities)
+    return capabilities
 
 
 # ===========================================================================

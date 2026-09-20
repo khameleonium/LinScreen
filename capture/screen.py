@@ -151,6 +151,12 @@ def grab_virtual_desktop() -> QImage:
     if not screens:
         raise CaptureBackendError("Графические экраны не обнаружены")
 
+    if len(screens) == 1:
+        # Единственный монитор: снимок экрана уже является снимком всего
+        # рабочего стола. Сборка холста заняла бы ещё столько же памяти
+        # и лишний проход отрисовки, что на слабом оборудовании заметно.
+        return grab_screen(screens[0])
+
     origin = virtual_geometry().topLeft()
     ratio = device_pixel_ratio()
     canvas_rect = to_device_rect(virtual_geometry(), ratio)

@@ -35,7 +35,22 @@ STATE_COLORS: dict[RecorderState, str] = {
 }
 
 
+# Готовые значки по состояниям. Отрисовка выполняется однократно:
+# состояния меняются часто, а изображение для каждого из них неизменно.
+_ICON_CACHE: dict[RecorderState, QIcon] = {}
+
+
 def render_tray_icon(state: RecorderState) -> QIcon:
+    """Значок трея для указанного состояния, с повторным использованием."""
+    cached = _ICON_CACHE.get(state)
+    if cached is not None:
+        return cached
+    icon = _draw_tray_icon(state)
+    _ICON_CACHE[state] = icon
+    return icon
+
+
+def _draw_tray_icon(state: RecorderState) -> QIcon:
     """Отрисовка значка трея для указанного состояния."""
     pixmap = QPixmap(ICON_SIZE, ICON_SIZE)
     pixmap.fill(Qt.GlobalColor.transparent)

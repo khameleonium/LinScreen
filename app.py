@@ -14,7 +14,7 @@ from pathlib import Path
 import os
 from collections import deque
 from datetime import datetime
-from typing import Callable
+from typing import Callable, TextIO, cast
 
 from PySide6.QtCore import QObject, QRect, QTimer, QUrl
 from PySide6.QtGui import QDesktopServices, QGuiApplication, QImage
@@ -116,6 +116,9 @@ class LinScreenApplication(QObject):
         self._log_window: LogWindow | None = None
         # Окна, скрытые на время записи и подлежащие возврату после неё.
         self._hidden_windows: list[QWidget] = []
+        # Открытый файл журнала: запись каждой строки с повторным открытием
+        # файла обходится в три системных вызова вместо одного.
+        self._log_file: TextIO | None = None
         self._settings_dialog: SettingsDialog | None = None
         # Признак ожидания завершения записи перед выходом из приложения.
         self._quit_after_recording = False
@@ -834,17 +837,38 @@ class LinScreenApplication(QObject):
         ограничен: при превышении предела файл начинается заново.
         """
         try:
-            path = log_file_path()
-            path.parent.mkdir(parents=True, exist_ok=True)
-            if path.exists() and path.stat().st_size > LOG_FILE_LIMIT:
-                path.unlink()
+            handle = self._log_handle()
+            if handle is None:
+                return
             stamp = datetime.now().strftime("%H:%M:%S")
-            with path.open("a", encoding="utf-8") as handle:
-                handle.write(f"{stamp} {line}\n")
+            handle.write(f"{stamp} {line}\n")
+            # Сброс на диск выполняется сразу: журнал нужен и после
+            # аварийного завершения, когда закрыть файл уже некому.
+            handle.flush()
         except OSError:
             # Журнал является вспомогательным средством: невозможность
             # записи не должна влиять на работу приложения.
-            pass
+            self._log_file = None
+
+    def _log_handle(self) -> TextIO | None:
+        """Открытый файл журнала с учётом предельного размера."""
+        path = log_file_path()
+        if self._log_file is not None:
+            if self._log_file.tell() <= LOG_FILE_LIMIT:
+                return self._log_file
+            # Файл разросся: он начинается заново, чтобы не занимать место.
+            self._log_file.close()
+            self._log_file = None
+
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            mode = "w" if path.exists() and path.stat().st_size > LOG_FILE_LIMIT else "a"
+            # Приведение типа требуется стабам: открытие текстового файла
+            # описано в них обобщённым видом.
+            self._log_file = cast(TextIO, path.open(mode, encoding="utf-8"))
+        except OSError:
+            return None
+        return self._log_file
 
     def open_log(self) -> None:
         """Показ окна журнала работы внешних процессов."""
@@ -936,6 +960,14 @@ class LinScreenApplication(QObject):
 
         self._hotkeys.stop()
         self._tray.hide()
+        if self._log_file is not None:
+            # Файл журнала закрывается явно: содержимое уже сброшено, но
+            # освобождение дескриптора относится к порядку завершения.
+            try:
+                self._log_file.close()
+            except OSError:
+                pass
+            self._log_file = None
         QApplication.quit()
 
     def _notify(self, title: str, message: str, is_error: bool = False) -> None:

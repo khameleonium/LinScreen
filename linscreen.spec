@@ -1,12 +1,17 @@
 # -*- mode: python ; coding: utf-8 -*-
 """
-Спецификация сборки единого исполняемого файла.
+Спецификация сборки приложения.
 
 Сборка выполняется командой:
     .venv/bin/pyinstaller linscreen.spec
 
-Результат складывается в каталог dist и представляет собой один файл,
-не требующий ни установленного Python, ни библиотек Qt, ни пакета ffmpeg.
+Предусмотрены два вида результата:
+
+* один файл (по умолчанию) - предельно простой перенос, но при каждом
+  запуске содержимое распаковывается во временный каталог, что занимает
+  около трёх секунд;
+* каталог (LINSCREEN_ONEDIR=1) - запускается мгновенно и служит основой
+  для образа AppImage, который монтируется вместо распаковки.
 
 Переменная окружения LINSCREEN_BUNDLE_FFMPEG=0 собирает облегчённый
 вариант, использующий системный ffmpeg.
@@ -69,22 +74,50 @@ analysis = Analysis(
 
 pyz = PYZ(analysis.pure)
 
-executable = EXE(
-    pyz,
-    analysis.scripts,
-    analysis.binaries,
-    analysis.datas,
-    [],
-    name="linscreen",
-    debug=False,
-    bootloader_ignore_signals=False,
-    # Сжатие исполняемого файла отключено: распаковка UPX заметно
-    # задерживает запуск, а выигрыш в размере невелик.
-    upx=False,
-    strip=False,
-    runtime_tmpdir=None,
-    # Приложение живёт в трее и терминала не требует; сообщения о сбоях
-    # пишутся в файл журнала, см. main.py.
-    console=False,
-    disable_windowed_traceback=False,
-)
+# Вид сборки выбирается переменной окружения.
+onedir = os.environ.get("LINSCREEN_ONEDIR", "0") == "1"
+
+if onedir:
+    # Раздельная сборка: рядом с запускающим файлом лежат библиотеки.
+    # Распаковка при запуске не выполняется, поэтому старт мгновенный.
+    executable = EXE(
+        pyz,
+        analysis.scripts,
+        [],
+        exclude_binaries=True,
+        name="linscreen",
+        debug=False,
+        bootloader_ignore_signals=False,
+        upx=False,
+        strip=False,
+        console=False,
+        disable_windowed_traceback=False,
+    )
+    collection = COLLECT(
+        executable,
+        analysis.binaries,
+        analysis.datas,
+        strip=False,
+        upx=False,
+        name="linscreen",
+    )
+else:
+    executable = EXE(
+        pyz,
+        analysis.scripts,
+        analysis.binaries,
+        analysis.datas,
+        [],
+        name="linscreen",
+        debug=False,
+        bootloader_ignore_signals=False,
+        # Сжатие исполняемого файла отключено: распаковка UPX заметно
+        # задерживает запуск, а выигрыш в размере невелик.
+        upx=False,
+        strip=False,
+        runtime_tmpdir=None,
+        # Приложение живёт в трее и терминала не требует; сообщения о
+        # сбоях пишутся в файл журнала, см. main.py.
+        console=False,
+        disable_windowed_traceback=False,
+    )

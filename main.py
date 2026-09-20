@@ -13,19 +13,29 @@ from __future__ import annotations
 
 import os
 import signal
+import socket
 import sys
 import traceback
 from datetime import datetime
 from pathlib import Path
 from types import TracebackType
 
-from PySide6.QtCore import QTimer
+from PySide6.QtCore import QSocketNotifier
 from PySide6.QtWidgets import QApplication, QMessageBox
 
 from app import LinScreenApplication
 from ui.tray import TrayIcon
 
 APPLICATION_VERSION = "1.0"
+
+# Число уже показанных сообщений об ошибке. Окно показывается только для
+# первой: повторяющийся сбой в обработчике событий иначе завалил бы экран
+# диалогами и сделал бы работу невозможной.
+_reported_errors = 0
+
+# Объекты обработки сигналов операционной системы. Ссылки удерживаются на
+# время работы приложения: уведомитель и сокеты не должны быть удалены.
+_signal_objects: list[object] = []
 
 
 def crash_log_path() -> Path:
@@ -42,32 +52,86 @@ def record_crash(
     """
     Запись необработанной ошибки в файл и показ сообщения пользователю.
 
+    Ошибка внутри обработчика события не прекращает работу приложения:
+    цикл событий продолжается. Поэтому запись ведётся всегда, а окно
+    показывается только для первой ошибки за запуск - иначе повторяющийся
+    сбой сделал бы работу невозможной.
+
     Прерывание с клавиатуры обрабатывается отдельно: это штатный способ
     завершения работы, а не сбой.
     """
+    global _reported_errors
+
     if issubclass(kind, KeyboardInterrupt):
         QApplication.quit()
         return
 
+    path = crash_log_path()
     report = "".join(traceback.format_exception(kind, value, trace))
     stamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     try:
-        path = crash_log_path()
         path.parent.mkdir(parents=True, exist_ok=True)
         # Записи добавляются в конец: история сбоев сохраняется целиком.
         with path.open("a", encoding="utf-8") as handle:
             handle.write(f"\n===== {stamp} =====\n{report}")
     except OSError:
         # Невозможность записи не должна порождать вторую ошибку.
-        path = crash_log_path()
+        pass
 
-    # Сообщение показывается только при работающей оконной подсистеме.
+    _reported_errors += 1
+    if _reported_errors > 1:
+        # Последующие ошибки попадают только в файл.
+        return
+
     if QApplication.instance() is not None:
-        QMessageBox.critical(
-            None,
-            "LinScreen",
-            f"Произошла ошибка:\n{value}\n\nПодробности записаны в файл:\n{path}",
-        )
+        try:
+            QMessageBox.critical(
+                None,
+                "LinScreen",
+                f"Произошла ошибка:\n{value}\n\n"
+                f"Работа продолжается. Подробности записаны в файл:\n{path}\n\n"
+                "Дальнейшие ошибки будут записываться без показа этого окна.",
+            )
+        except Exception:  # noqa: BLE001 - обработчик ошибок не вправе падать
+            pass
+
+
+def install_signal_handling(controller: LinScreenApplication) -> None:
+    """
+    Штатное завершение по сигналам операционной системы.
+
+    Интерпретатор обрабатывает сигналы только при исполнении своего кода,
+    а приложение почти всё время проводит в цикле событий Qt. Вместо
+    периодического пробуждения, расходующего заряд и процессорное время,
+    применяется пара сокетов: интерпретатор записывает в неё номер
+    сигнала, а Qt пробуждается на готовности к чтению.
+
+    Обрабатываются прерывание с терминала и запрос завершения при выходе
+    из сеанса: в обоих случаях незаконченная запись корректно завершается.
+    """
+    receiver, sender = socket.socketpair()
+    receiver.setblocking(False)
+    sender.setblocking(False)
+    signal.set_wakeup_fd(sender.fileno())
+
+    notifier = QSocketNotifier(receiver.fileno(), QSocketNotifier.Type.Read)
+
+    def on_signal() -> None:
+        """Обработка полученного сигнала в потоке интерфейса."""
+        try:
+            receiver.recv(1024)
+        except OSError:
+            pass
+        controller.quit()
+
+    notifier.activated.connect(lambda *_: on_signal())
+
+    # Обработчики оставляются пустыми: действие выполняет уведомитель,
+    # которому сигнал доставляется через пару сокетов.
+    for number in (signal.SIGINT, signal.SIGTERM):
+        signal.signal(number, lambda *_: None)
+
+    _signal_objects.extend((receiver, sender, notifier))
 
 
 def self_test() -> int:
@@ -188,13 +252,7 @@ def main() -> int:
 
     controller = LinScreenApplication()
     controller.start()
-
-    # Прерывание с терминала обрабатывается штатно: таймер периодически
-    # возвращает управление интерпретатору, позволяя сработать обработчику.
-    signal.signal(signal.SIGINT, lambda *_: controller.quit())
-    heartbeat = QTimer()
-    heartbeat.start(500)
-    heartbeat.timeout.connect(lambda: None)
+    install_signal_handling(controller)
 
     return application.exec()
 
