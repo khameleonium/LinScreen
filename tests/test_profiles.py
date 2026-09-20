@@ -6,10 +6,12 @@ import unittest
 from pathlib import Path
 
 from encoder.profiles import (
+    AudioCodec,
     AudioInput,
     AudioMode,
     AudioRole,
     Container,
+    ProfileOverrides,
     VideoCodec,
     VideoInput,
     VideoProfileManager,
@@ -123,6 +125,146 @@ class ProfileCommandTest(unittest.TestCase):
         command = self.build("mkv_ffv1")
         self.assertIn("-slicecrc", command)
         self.assertEqual(command[command.index("-g") + 1], "1")
+
+
+class OverrideTest(unittest.TestCase):
+    """Наложение пользовательских уточнений на профиль."""
+
+    def setUp(self) -> None:
+        """Менеджер профилей и типовой видеовход."""
+        self.manager = VideoProfileManager(available_encoders=FULL_ENCODERS)
+        self.profile = self.manager.video_profile("mkv_h264")
+        self.video = VideoInput(args=["-i", ":0"], fps=30, needs_even_padding=False)
+
+    def build(self, overrides: ProfileOverrides) -> list[str]:
+        """Команда записи с наложенными уточнениями."""
+        profile = self.manager.apply_overrides(self.profile, overrides)
+        return self.manager.build_record_command(profile, self.video, Path("/tmp/out.mkv"))
+
+    def test_empty_overrides_keep_profile(self) -> None:
+        """Пустой набор уточнений оставляет профиль неизменным."""
+        self.assertIs(
+            self.manager.apply_overrides(self.profile, ProfileOverrides()), self.profile
+        )
+
+    def test_codec_is_replaced(self) -> None:
+        """Выбранный кодек заменяет заданный профилем."""
+        command = self.build(ProfileOverrides(video_codec=VideoCodec.H265))
+        self.assertIn("libx265", command)
+        self.assertNotIn("libx264", command)
+
+    def test_bitrate_mode_removes_constant_quality(self) -> None:
+        """Заданный битрейт отменяет постоянное качество."""
+        command = self.build(ProfileOverrides(rate_mode="bitrate", video_bitrate="9000k"))
+        self.assertIn("-b:v", command)
+        self.assertEqual(command[command.index("-b:v") + 1], "9000k")
+        self.assertNotIn("-crf", command)
+
+    def test_constant_quality_removes_bitrate(self) -> None:
+        """Постоянное качество отменяет заданный битрейт."""
+        command = self.build(ProfileOverrides(rate_mode="crf", crf=30))
+        self.assertEqual(command[command.index("-crf") + 1], "30")
+        self.assertNotIn("-b:v", command)
+
+    def test_extra_arguments_are_split_by_shell_rules(self) -> None:
+        """Строка дополнительных аргументов разбирается как командная строка."""
+        command = self.build(
+            ProfileOverrides(extra_args='-tune zerolatency -metadata comment="проба связи"')
+        )
+        self.assertIn("-tune", command)
+        self.assertIn("zerolatency", command)
+        # Значение в кавычках остаётся одним аргументом.
+        self.assertIn("comment=проба связи", command)
+
+    def test_audio_parameters_are_applied(self) -> None:
+        """Уточнения звука попадают в команду."""
+        profile = self.manager.apply_overrides(
+            self.profile,
+            ProfileOverrides(
+                audio_codec=AudioCodec.FLAC, audio_sample_rate=44100, audio_channels=1
+            ),
+        )
+        audio = (AudioInput(args=["-i", "src"], role=AudioRole.SYSTEM),)
+        command = self.manager.build_record_command(
+            profile, self.video, Path("/tmp/out.mkv"), audio, AudioMode.SYSTEM
+        )
+        self.assertIn("flac", command)
+        self.assertEqual(command[command.index("-ar") + 1], "44100")
+        self.assertEqual(command[command.index("-ac") + 1], "1")
+
+
+class CustomCommandTest(unittest.TestCase):
+    """Сборка команды по заданному пользователем образцу."""
+
+    def setUp(self) -> None:
+        """Менеджер профилей и подготовленные входы."""
+        self.manager = VideoProfileManager(
+            ffmpeg_path="/usr/bin/ffmpeg", available_encoders=FULL_ENCODERS
+        )
+        self.video = VideoInput(
+            args=["-f", "x11grab", "-i", ":0+0,0"], fps=25, width=640, height=480
+        )
+        self.audio = (AudioInput(args=["-f", "pulse", "-i", "monitor"]),)
+
+    def build(self, template: str, audio: tuple[AudioInput, ...] = ()) -> list[str]:
+        """Команда, собранная по образцу."""
+        return self.manager.build_custom_command(
+            template, self.video, Path("/tmp/каталог с пробелом/итог.mkv"), audio
+        )
+
+    def test_placeholders_are_expanded(self) -> None:
+        """Обозначения заменяются подготовленными аргументами."""
+        command = self.build("{ffmpeg} {video_input} -c:v libx264 {output}")
+        self.assertIn("x11grab", command)
+        self.assertIn("libx264", command)
+        self.assertEqual(command[0], "/usr/bin/ffmpeg")
+
+    def test_output_path_stays_single_argument(self) -> None:
+        """Путь с пробелами остаётся одним элементом списка."""
+        command = self.build("{ffmpeg} {video_input} {output}")
+        self.assertEqual(command[-1], "/tmp/каталог с пробелом/итог.mkv")
+
+    def test_audio_placeholder_expands_all_sources(self) -> None:
+        """Обозначение звука раскрывается во все выбранные источники."""
+        command = self.build("{ffmpeg} {video_input} {audio_input} {output}", self.audio)
+        self.assertIn("pulse", command)
+        self.assertIn("monitor", command)
+
+    def test_global_flags_are_forced(self) -> None:
+        """Флаги прогресса и перезаписи добавляются независимо от образца."""
+        command = self.build("{ffmpeg} {video_input} {output}")
+        self.assertIn("-progress", command)
+        self.assertIn("-y", command)
+        # Запрет чтения ввода недопустим: по нему передаётся остановка.
+        self.assertNotIn("-nostdin", command)
+
+    def test_scalar_placeholders(self) -> None:
+        """Отдельные значения захвата подставляются внутрь аргументов."""
+        command = self.build("{ffmpeg} {video_input} -r {fps} -s {width}x{height} {output}")
+        self.assertIn("25", command)
+        self.assertIn("640x480", command)
+
+    def test_missing_output_is_rejected(self) -> None:
+        """Образец без обозначения файла отвергается."""
+        with self.assertRaises(ValueError):
+            self.build("{ffmpeg} {video_input} -c:v libx264 out.mkv")
+
+    def test_binary_is_added_when_absent(self) -> None:
+        """Образец без обозначения кодировщика получает его первым элементом."""
+        command = self.build("{video_input} -c:v libx264 {output}")
+        self.assertEqual(command[0], "/usr/bin/ffmpeg")
+
+    def test_template_matches_profile(self) -> None:
+        """Образец, созданный по профилю, повторяет его параметры."""
+        profile = self.manager.video_profile("mp4_h264")
+        template = self.manager.build_command_template(profile)
+        self.assertIn("{video_input}", template)
+        self.assertIn("{output}", template)
+        command = self.manager.build_custom_command(
+            template, self.video, Path("/tmp/out.mp4")
+        )
+        self.assertIn("libx264", command)
+        self.assertIn("+faststart", command)
 
 
 class AnimationCommandTest(unittest.TestCase):

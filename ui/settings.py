@@ -12,6 +12,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from PySide6.QtCore import Signal
+from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -22,7 +23,9 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QPlainTextEdit,
     QPushButton,
+    QRadioButton,
     QSpinBox,
     QTabWidget,
     QVBoxLayout,
@@ -40,7 +43,7 @@ from core.config import ConfigManager
 from core.session import DesktopSession
 from core.workers import run_async
 from encoder.images import FORMAT_TITLES
-from encoder.profiles import AudioMode, VideoProfileManager
+from encoder.profiles import AudioCodec, AudioMode, VideoCodec, VideoProfileManager
 
 
 class PathChooser(QWidget):
@@ -98,6 +101,7 @@ class SettingsDialog(QDialog):
         tabs.addTab(self._build_general_tab(), "Общие")
         tabs.addTab(self._build_image_tab(), "Снимки")
         tabs.addTab(self._build_video_tab(), "Запись")
+        tabs.addTab(self._build_encoding_tab(), "Кодирование")
         tabs.addTab(self._build_hotkey_tab(), "Клавиши")
 
         buttons = QDialogButtonBox(
@@ -264,6 +268,245 @@ class SettingsDialog(QDialog):
         form.addRow("Микрофон:", self._microphone_device)
         return page
 
+    def _build_encoding_tab(self) -> QWidget:
+        """
+        Вкладка ручной настройки кодирования.
+
+        Значения уточняют выбранный профиль: пункт «как в профиле»
+        оставляет параметр таким, каким его задаёт профиль записи.
+        """
+        settings = self._config.settings.encoding
+        page = QWidget()
+        form = QFormLayout(page)
+
+        # --- Видео ---
+        self._video_codec = QComboBox()
+        self._video_codec.addItem("Как в профиле", "")
+        for codec in (
+            VideoCodec.H264,
+            VideoCodec.H265,
+            VideoCodec.AV1,
+            VideoCodec.VP9,
+            VideoCodec.FFV1,
+            VideoCodec.PRORES,
+            VideoCodec.MPEG4,
+        ):
+            available = self._profiles.is_encoder_available(codec.encoder)
+            title = codec.encoder + ("" if available else " (нет в сборке)")
+            self._video_codec.addItem(title, codec.value)
+        index = self._video_codec.findData(settings.video_codec)
+        self._video_codec.setCurrentIndex(max(0, index))
+        form.addRow("Энкодер видео:", self._video_codec)
+
+        # Способы управления качеством исключают друг друга, как и в
+        # прочих программах записи экрана.
+        self._rate_crf = QRadioButton("Постоянное качество (CRF)")
+        self._rate_bitrate = QRadioButton("Заданный битрейт")
+        self._rate_crf.setChecked(settings.rate_mode != "bitrate")
+        self._rate_bitrate.setChecked(settings.rate_mode == "bitrate")
+
+        self._crf = QSpinBox()
+        self._crf.setRange(0, 63)
+        self._crf.setSpecialValueText("как в профиле")
+        self._crf.setValue(settings.crf)
+        self._crf.setToolTip(
+            "Меньше значение — выше качество и больше файл. "
+            "Типичные значения: 18–23 для H.264, 24–28 для H.265, 30–36 для AV1."
+        )
+
+        self._video_bitrate = QLineEdit(settings.video_bitrate)
+        self._video_bitrate.setPlaceholderText("например 8000k")
+
+        quality_row = QHBoxLayout()
+        quality_row.setContentsMargins(0, 0, 0, 0)
+        quality_row.addWidget(self._rate_crf)
+        quality_row.addWidget(self._crf)
+        quality_row.addWidget(self._rate_bitrate)
+        quality_row.addWidget(self._video_bitrate)
+        quality_widget = QWidget()
+        quality_widget.setLayout(quality_row)
+        form.addRow("Качество:", quality_widget)
+
+        self._rate_crf.toggled.connect(self._update_rate_controls)
+        self._update_rate_controls()
+
+        self._preset = QComboBox()
+        self._preset.setEditable(True)
+        self._preset.addItems(
+            [
+                "",
+                "ultrafast",
+                "superfast",
+                "veryfast",
+                "faster",
+                "fast",
+                "medium",
+                "slow",
+                "slower",
+                "veryslow",
+            ]
+        )
+        self._preset.setCurrentText(settings.preset)
+        self._preset.setToolTip(
+            "Скорость кодирования. Пустое поле — значение профиля. "
+            "Для ProRes применяются названия proxy, lt, standard, hq."
+        )
+        form.addRow("Пресет скорости:", self._preset)
+
+        self._keyint = QSpinBox()
+        self._keyint.setRange(0, 600)
+        self._keyint.setSpecialValueText("как в профиле")
+        self._keyint.setValue(settings.keyint)
+        self._keyint.setToolTip("Интервал ключевых кадров. Меньше — точнее перемотка.")
+        form.addRow("Ключевые кадры:", self._keyint)
+
+        self._pix_fmt = QComboBox()
+        self._pix_fmt.setEditable(True)
+        self._pix_fmt.addItems(["", "yuv420p", "yuv422p", "yuv444p", "yuv422p10le", "bgr0"])
+        self._pix_fmt.setCurrentText(settings.pix_fmt)
+        form.addRow("Формат пикселей:", self._pix_fmt)
+
+        # --- Звук ---
+        self._audio_codec = QComboBox()
+        self._audio_codec.addItem("Как в профиле", "")
+        for audio_codec in AudioCodec:
+            self._audio_codec.addItem(audio_codec.encoder, audio_codec.value)
+        index = self._audio_codec.findData(settings.audio_codec)
+        self._audio_codec.setCurrentIndex(max(0, index))
+        form.addRow("Энкодер звука:", self._audio_codec)
+
+        self._audio_bitrate = QLineEdit(settings.audio_bitrate)
+        self._audio_bitrate.setPlaceholderText("как в профиле, например 160k")
+        form.addRow("Битрейт звука:", self._audio_bitrate)
+
+        self._audio_rate = QSpinBox()
+        self._audio_rate.setRange(0, 192000)
+        self._audio_rate.setSingleStep(8000)
+        self._audio_rate.setSpecialValueText("как в профиле")
+        self._audio_rate.setValue(settings.audio_sample_rate)
+        form.addRow("Частота дискретизации:", self._audio_rate)
+
+        self._audio_channels = QSpinBox()
+        self._audio_channels.setRange(0, 8)
+        self._audio_channels.setSpecialValueText("как в профиле")
+        self._audio_channels.setValue(settings.audio_channels)
+        form.addRow("Каналов звука:", self._audio_channels)
+
+        # --- Дополнительные аргументы и ручная команда ---
+        self._extra_args = QLineEdit(settings.extra_args)
+        self._extra_args.setPlaceholderText("например -tune zerolatency -x264-params keyint=60")
+        self._extra_args.setToolTip(
+            "Добавляются в конец команды перед путём к файлу. "
+            "Разбираются по правилам оболочки."
+        )
+        form.addRow("Дополнительные аргументы:", self._extra_args)
+
+        self._use_custom = QCheckBox("Использовать свою команду")
+        self._use_custom.setChecked(settings.use_custom_command)
+        self._use_custom.toggled.connect(self._update_custom_controls)
+        form.addRow(self._use_custom)
+
+        self._custom_command = QPlainTextEdit(settings.custom_command)
+        self._custom_command.setMinimumHeight(90)
+        font = QFont("monospace")
+        font.setStyleHint(QFont.StyleHint.TypeWriter)
+        self._custom_command.setFont(font)
+        form.addRow(self._custom_command)
+
+        hint = QLabel(
+            "Подстановки: {ffmpeg} — путь к кодировщику с общими флагами, "
+            "{video_input} — аргументы захвата экрана, {audio_input} — все "
+            "выбранные источники звука, {output} — путь к файлу, "
+            "{fps}, {width}, {height} — параметры захвата. "
+            "Остальные параметры этой вкладки при ручной команде не применяются."
+        )
+        hint.setWordWrap(True)
+        form.addRow(hint)
+
+        buttons = QHBoxLayout()
+        buttons.setContentsMargins(0, 0, 0, 0)
+        fill = QPushButton("Подставить текущую команду")
+        fill.clicked.connect(self._fill_command_template)
+        reset = QPushButton("Сбросить параметры кодирования")
+        reset.clicked.connect(self._reset_encoding)
+        buttons.addWidget(fill)
+        buttons.addWidget(reset)
+        container = QWidget()
+        container.setLayout(buttons)
+        form.addRow(container)
+
+        self._update_custom_controls()
+        return page
+
+    def _update_rate_controls(self) -> None:
+        """Согласование полей качества с выбранным способом."""
+        use_crf = self._rate_crf.isChecked()
+        self._crf.setEnabled(use_crf)
+        self._video_bitrate.setEnabled(not use_crf)
+
+    def _update_custom_controls(self) -> None:
+        """Блокировка параметров, не применяемых при ручной команде."""
+        custom = self._use_custom.isChecked()
+        self._custom_command.setEnabled(custom)
+        for widget in (
+            self._video_codec,
+            self._crf,
+            self._video_bitrate,
+            self._rate_crf,
+            self._rate_bitrate,
+            self._preset,
+            self._keyint,
+            self._pix_fmt,
+            self._audio_codec,
+            self._audio_bitrate,
+            self._audio_rate,
+            self._audio_channels,
+            self._extra_args,
+        ):
+            widget.setEnabled(not custom)
+        if not custom:
+            self._update_rate_controls()
+
+    def _fill_command_template(self) -> None:
+        """Подстановка команды, соответствующей текущим настройкам."""
+        identifier = str(self._profile.currentData())
+        animation_ids = {item.identifier for item in self._profiles.animation_profiles()}
+        if identifier in animation_ids:
+            # Анимация собирается в несколько проходов, и единой команды
+            # записи для неё не существует.
+            self._custom_command.setPlainText(
+                "# Для анимаций ручная команда не применяется: "
+                "запись ведётся профилем без потерь с последующей сборкой."
+            )
+            return
+
+        profile = self._profiles.video_profile(identifier)
+        try:
+            mode = AudioMode(str(self._audio_mode.currentData()))
+        except ValueError:
+            mode = AudioMode.NONE
+        sources = {AudioMode.NONE: 0, AudioMode.SEPARATE: 2, AudioMode.MIX: 2}.get(mode, 1)
+        self._custom_command.setPlainText(
+            self._profiles.build_command_template(profile, mode, sources)
+        )
+
+    def _reset_encoding(self) -> None:
+        """Возврат параметров кодирования к значениям профиля."""
+        self._video_codec.setCurrentIndex(0)
+        self._rate_crf.setChecked(True)
+        self._crf.setValue(0)
+        self._video_bitrate.clear()
+        self._preset.setCurrentText("")
+        self._keyint.setValue(0)
+        self._pix_fmt.setCurrentText("")
+        self._audio_codec.setCurrentIndex(0)
+        self._audio_bitrate.clear()
+        self._audio_rate.setValue(0)
+        self._audio_channels.setValue(0)
+        self._extra_args.clear()
+        self._use_custom.setChecked(False)
+        self._custom_command.clear()
+
     def _build_hotkey_tab(self) -> QWidget:
         """Вкладка настройки глобальных сочетаний клавиш."""
         from ui.widgets.hotkey_edit import HotkeyEdit
@@ -340,6 +583,22 @@ class SettingsDialog(QDialog):
         settings.images.webp_quality = self._webp_quality.value()
         settings.images.webp_lossless = self._webp_lossless.isChecked()
         settings.images.avif_quality = self._avif_quality.value()
+
+        encoding = settings.encoding
+        encoding.video_codec = str(self._video_codec.currentData() or "")
+        encoding.audio_codec = str(self._audio_codec.currentData() or "")
+        encoding.rate_mode = "crf" if self._rate_crf.isChecked() else "bitrate"
+        encoding.crf = self._crf.value()
+        encoding.video_bitrate = self._video_bitrate.text().strip()
+        encoding.preset = self._preset.currentText().strip()
+        encoding.keyint = self._keyint.value()
+        encoding.pix_fmt = self._pix_fmt.currentText().strip()
+        encoding.audio_bitrate = self._audio_bitrate.text().strip()
+        encoding.audio_sample_rate = self._audio_rate.value()
+        encoding.audio_channels = self._audio_channels.value()
+        encoding.extra_args = self._extra_args.text().strip()
+        encoding.use_custom_command = self._use_custom.isChecked()
+        encoding.custom_command = self._custom_command.toPlainText().strip()
 
         settings.video.profile_id = str(self._profile.currentData())
         settings.video.fps = self._fps.value()

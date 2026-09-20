@@ -77,6 +77,45 @@ class VideoSettings:
 
 
 @dataclass
+class EncodingSettings:
+    """
+    Ручная настройка параметров кодирования.
+
+    Пустое значение или ноль означают «взять из выбранного профиля»,
+    поэтому настройки остаются необязательными: профиль продолжает
+    работать как готовый набор параметров, а эти поля лишь уточняют его.
+    """
+
+    # Имена из перечислений VideoCodec и AudioCodec.
+    video_codec: str = ""
+    audio_codec: str = ""
+
+    # Способ управления качеством: crf - постоянное качество,
+    # bitrate - заданный битрейт.
+    rate_mode: str = "crf"
+    crf: int = 0
+    video_bitrate: str = ""
+
+    # Пресет скорости кодирования и интервал ключевых кадров.
+    preset: str = ""
+    keyint: int = 0
+    pix_fmt: str = ""
+
+    audio_bitrate: str = ""
+    audio_sample_rate: int = 0
+    audio_channels: int = 0
+
+    # Дополнительные аргументы, добавляемые в конец команды перед путём
+    # к файлу. Разбираются по правилам оболочки.
+    extra_args: str = ""
+
+    # Полностью ручная команда. При её использовании прочие параметры
+    # кодирования не применяются.
+    use_custom_command: bool = False
+    custom_command: str = ""
+
+
+@dataclass
 class HotkeySettings:
     """Глобальные сочетания клавиш."""
 
@@ -112,6 +151,7 @@ class Settings:
     paths: PathSettings = field(default_factory=PathSettings)
     images: ImageSettings = field(default_factory=ImageSettings)
     video: VideoSettings = field(default_factory=VideoSettings)
+    encoding: EncodingSettings = field(default_factory=EncodingSettings)
     hotkeys: HotkeySettings = field(default_factory=HotkeySettings)
     general: GeneralSettings = field(default_factory=GeneralSettings)
 

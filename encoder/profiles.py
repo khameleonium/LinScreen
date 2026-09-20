@@ -327,6 +327,36 @@ class AnimationProfile:
 
 
 @dataclass(frozen=True)
+class ProfileOverrides:
+    """
+    Уточнения параметров профиля, заданные пользователем вручную.
+
+    Пустое значение поля означает сохранение значения профиля, поэтому
+    набор применяется поверх любого профиля без его переписывания.
+    """
+
+    video_codec: VideoCodec | None = None
+    audio_codec: AudioCodec | None = None
+    # Способ управления качеством: "crf" либо "bitrate".
+    rate_mode: str = ""
+    crf: int | None = None
+    video_bitrate: str = ""
+    preset: str = ""
+    keyint: int | None = None
+    pix_fmt: str = ""
+    audio_bitrate: str = ""
+    audio_sample_rate: int | None = None
+    audio_channels: int | None = None
+    # Дополнительные аргументы в виде строки командной оболочки.
+    extra_args: str = ""
+
+    @property
+    def is_empty(self) -> bool:
+        """Признак отсутствия каких-либо уточнений."""
+        return self == ProfileOverrides()
+
+
+@dataclass(frozen=True)
 class FFmpegStep:
     """
     Один шаг задания FFmpeg.
@@ -651,6 +681,179 @@ class VideoProfileManager:
         # AAC присутствует во FFmpeg всегда как встроенный энкодер,
         # поэтому используется как универсальный запасной вариант.
         return replace(profile, audio_codec=AudioCodec.AAC)
+
+    def apply_overrides(
+        self, profile: VideoProfile, overrides: ProfileOverrides
+    ) -> VideoProfile:
+        """
+        Наложение пользовательских уточнений на профиль.
+
+        Возвращается новый профиль: исходный набор профилей остаётся
+        неизменным и может быть выбран заново в любой момент.
+        """
+        if overrides.is_empty:
+            return profile
+
+        changes: dict[str, object] = {}
+        if overrides.video_codec is not None:
+            changes["video_codec"] = overrides.video_codec
+        if overrides.audio_codec is not None:
+            changes["audio_codec"] = overrides.audio_codec
+        if overrides.preset:
+            changes["preset"] = overrides.preset
+        if overrides.pix_fmt:
+            changes["pix_fmt"] = overrides.pix_fmt
+        if overrides.keyint is not None:
+            changes["keyint"] = overrides.keyint
+        if overrides.audio_bitrate:
+            changes["audio_bitrate"] = overrides.audio_bitrate
+        if overrides.audio_sample_rate:
+            changes["audio_sample_rate"] = overrides.audio_sample_rate
+        if overrides.audio_channels:
+            changes["audio_channels"] = overrides.audio_channels
+
+        # Способы управления качеством исключают друг друга: заданный
+        # битрейт отменяет постоянное качество и наоборот.
+        if overrides.rate_mode == "bitrate" and overrides.video_bitrate:
+            changes["video_bitrate"] = overrides.video_bitrate
+            changes["crf"] = None
+        elif overrides.rate_mode == "crf" and overrides.crf is not None:
+            changes["crf"] = overrides.crf
+            changes["video_bitrate"] = None
+
+        if overrides.extra_args:
+            # Строка разбирается по правилам оболочки, но исполняется без
+            # неё: каждый аргумент попадает в список отдельным элементом.
+            changes["extra_output_args"] = tuple(shlex.split(overrides.extra_args))
+
+        return replace(profile, **changes)  # type: ignore[arg-type]
+
+    def build_custom_command(
+        self,
+        template: str,
+        video_input: VideoInput,
+        output_path: Path,
+        audio_inputs: Sequence[AudioInput] = (),
+    ) -> list[str]:
+        """
+        Сборка команды по заданному пользователем образцу.
+
+        Образец содержит подстановки, вместо которых подставляются
+        подготовленные приложением значения:
+
+            {ffmpeg}       путь к бинарнику вместе с общими флагами,
+                           включая передачу прогресса и подавление
+                           интерактивных вопросов;
+            {video_input}  аргументы входа захвата экрана целиком;
+            {audio_input}  аргументы всех звуковых входов целиком;
+            {output}       путь к файлу результата;
+            {fps}, {width}, {height}  отдельные значения захвата.
+
+        Образец разбирается по правилам оболочки, после чего подстановки
+        заменяются готовыми элементами списка. Сама оболочка при запуске
+        не участвует, поэтому пробелы в путях безопасны.
+        """
+        if "{output}" not in template:
+            raise ValueError("В образце команды отсутствует подстановка {output}")
+
+        scalars = {
+            "{fps}": str(video_input.fps),
+            "{width}": str(video_input.width or 0),
+            "{height}": str(video_input.height or 0),
+        }
+        audio_args: list[str] = []
+        for audio_input in audio_inputs:
+            audio_args += list(audio_input.args)
+
+        command: list[str] = []
+        for token in shlex.split(template):
+            if token == "{ffmpeg}":
+                command.append(self._ffmpeg_path)
+                # Общие флаги добавляются принудительно: без них не работают
+                # ни счётчик длительности, ни остановка по команде "q".
+                command += self._global_args(overwrite=True, report_progress=True)
+            elif token == "{video_input}":
+                command += list(video_input.args)
+            elif token == "{audio_input}":
+                command += audio_args
+            elif token == "{output}":
+                command.append(str(output_path))
+            else:
+                for name, value in scalars.items():
+                    token = token.replace(name, value)
+                command.append(token)
+
+        if not command:
+            raise ValueError("Образец команды пуст")
+        if command[0] != self._ffmpeg_path:
+            # Образец без подстановки {ffmpeg} начинается сразу с аргументов.
+            command = [self._ffmpeg_path, *command]
+        return command
+
+    def build_command_template(
+        self,
+        profile: VideoProfile,
+        audio_mode: AudioMode = AudioMode.NONE,
+        audio_sources: int = 0,
+    ) -> str:
+        """
+        Образец ручной команды, повторяющий действие выбранного профиля.
+
+        Служит отправной точкой для правки: пользователю не приходится
+        составлять команду с нуля. Вместо аргументов входов и пути к файлу
+        подставляются соответствующие обозначения.
+        """
+        video = VideoInput(args=["{video_input}"], fps=30, needs_even_padding=False)
+
+        # Первый звуковой вход несёт обозначение целиком, остальные пусты:
+        # обозначение раскрывается сразу во все выбранные источники, а
+        # число входов влияет на нумерацию потоков в аргументах отображения.
+        audio = tuple(
+            AudioInput(
+                args=["{audio_input}"] if index == 0 else [],
+                role=AudioRole.SYSTEM if index == 0 else AudioRole.MICROPHONE,
+            )
+            for index in range(max(0, audio_sources))
+        )
+
+        command = self.build_record_command(
+            profile,
+            video,
+            Path("{output}"),
+            audio,
+            audio_mode if audio else AudioMode.NONE,
+            report_progress=False,
+        )
+
+        # Путь к бинарнику и общие флаги заменяются одним обозначением:
+        # при сборке команды они подставляются принудительно.
+        body = command[1:]
+        skipped = self._global_args(overwrite=True, report_progress=False)
+        if body[: len(skipped)] == skipped:
+            body = body[len(skipped):]
+
+        # Обозначения оставляются без кавычек ради читаемости, остальные
+        # аргументы экранируются: образец разбирается по правилам оболочки.
+        parts = [
+            token if token.startswith("{") and token.endswith("}") else shlex.quote(token)
+            for token in body
+        ]
+        return "{ffmpeg} " + " ".join(parts)
+
+    def build_custom_step(
+        self,
+        template: str,
+        video_input: VideoInput,
+        output_path: Path,
+        audio_inputs: Sequence[AudioInput] = (),
+    ) -> FFmpegStep:
+        """Обёртка ручной команды в объект шага для контроллера процесса."""
+        return FFmpegStep(
+            label="Запись по заданной команде",
+            args=self.build_custom_command(
+                template, video_input, output_path, audio_inputs
+            ),
+        )
 
     def validate(
         self,

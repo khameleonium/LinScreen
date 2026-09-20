@@ -54,7 +54,13 @@ from encoder.images import (
     save_image,
 )
 from encoder.process import CapabilityProbe, RecorderState, RecordingJob, ScreenRecorder
-from encoder.profiles import AudioMode, VideoProfileManager
+from encoder.profiles import (
+    AudioCodec,
+    AudioMode,
+    ProfileOverrides,
+    VideoCodec,
+    VideoProfileManager,
+)
 from ui.overlay import RegionOverlay
 from ui.recorder_bar import RecorderBar
 from ui.settings import SettingsDialog
@@ -542,6 +548,69 @@ class LinScreenApplication(QObject):
             return
         self._recorder_bar.show_at_corner()
 
+    def _overrides(self) -> ProfileOverrides:
+        """
+        Пользовательские уточнения параметров кодирования.
+
+        Значения приводятся к типам перечислений с защитой от неверного
+        содержимого файла настроек: непонятное значение не применяется,
+        и профиль остаётся без изменений.
+        """
+        settings = self._config.settings.encoding
+
+        def as_enum(value, kind):  # type: ignore[no-untyped-def]
+            """Преобразование строки настроек в значение перечисления."""
+            if not value:
+                return None
+            try:
+                return kind(value)
+            except ValueError:
+                return None
+
+        return ProfileOverrides(
+            video_codec=as_enum(settings.video_codec, VideoCodec),
+            audio_codec=as_enum(settings.audio_codec, AudioCodec),
+            rate_mode=settings.rate_mode,
+            crf=settings.crf or None,
+            video_bitrate=settings.video_bitrate,
+            preset=settings.preset,
+            keyint=settings.keyint or None,
+            pix_fmt=settings.pix_fmt,
+            audio_bitrate=settings.audio_bitrate,
+            audio_sample_rate=settings.audio_sample_rate or None,
+            audio_channels=settings.audio_channels or None,
+            extra_args=settings.extra_args,
+        )
+
+    def _make_record_step(  # type: ignore[no-untyped-def]
+        self, profile, video_input, audio_inputs, audio_mode
+    ):
+        """
+        Сборщик команды захвата для очередного фрагмента.
+
+        При включённой ручной команде сборка ведётся по образцу
+        пользователя, иначе - по параметрам профиля.
+        """
+        encoding = self._config.settings.encoding
+        if encoding.use_custom_command and encoding.custom_command.strip():
+            template = encoding.custom_command
+
+            def custom(segment):  # type: ignore[no-untyped-def]
+                """Команда по заданному пользователем образцу."""
+                return self._profiles.build_custom_step(
+                    template, video_input, segment, audio_inputs
+                )
+
+            return custom
+
+        def standard(segment):  # type: ignore[no-untyped-def]
+            """Команда, собранная по параметрам профиля."""
+            return self._profiles.build_record_step(
+                profile, video_input, segment, audio_inputs, audio_mode
+            )
+
+        return standard
+
     def _build_job(  # type: ignore[no-untyped-def]
         self, video_input, audio_inputs, audio_mode
     ) -> RecordingJob | None:
@@ -574,11 +643,27 @@ class LinScreenApplication(QObject):
             self._notify("Запись", f"Неизвестный профиль: {identifier}", is_error=True)
             return None
 
+        # Уточнения применяются поверх профиля: кодек, качество, пресет
+        # и дополнительные аргументы задаются пользователем вручную.
+        profile = self._profiles.apply_overrides(profile, self._overrides())
         output = self._config.build_video_path(profile.container.extension)
+
+        encoding = self._config.settings.encoding
+        if encoding.use_custom_command and encoding.custom_command.strip():
+            # Ошибка в образце команды обнаруживается сразу, до запуска
+            # захвата, а не по отсутствию файла в конце записи.
+            try:
+                self._profiles.build_custom_command(
+                    encoding.custom_command, video_input, output, audio_inputs
+                )
+            except ValueError as error:
+                self._notify("Запись", f"Ошибка в команде: {error}", is_error=True)
+                return None
+
         return RecordingJob(
             output_path=output,
-            make_step=lambda segment: self._profiles.build_record_step(
-                profile, video_input, segment, audio_inputs, audio_mode
+            make_step=self._make_record_step(
+                profile, video_input, audio_inputs, audio_mode
             ),
             ffmpeg_path=self._ffmpeg_path,
             # Фрагменты пишутся тем же контейнером, что и результат: склейка
