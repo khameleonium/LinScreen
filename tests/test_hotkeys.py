@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import unittest
 
-from core.hotkeys import to_pynput_sequence
+from core.hotkeys import _x11_key_name, to_pynput_sequence, to_pynput_sequences
 
 
 class HotkeyConversionTest(unittest.TestCase):
@@ -37,6 +37,41 @@ class HotkeyConversionTest(unittest.TestCase):
     def test_stray_separators_are_skipped(self) -> None:
         """Лишние разделители не порождают пустых элементов."""
         self.assertEqual(to_pynput_sequence("Ctrl++R"), "<ctrl>+r")
+
+
+class ShiftVariantTest(unittest.TestCase):
+    """Учёт символов верхнего уровня клавиши."""
+
+    def test_single_sequence_without_shift(self) -> None:
+        """Без Shift символ клавиши не меняется, вариант один."""
+        self.assertEqual(to_pynput_sequences("Print"), ["<print_screen>"])
+        self.assertEqual(to_pynput_sequences("Ctrl+Alt+R"), ["<ctrl>+<alt>+r"])
+
+    def test_shift_combination_keeps_base_first(self) -> None:
+        """Основное обозначение остаётся первым в перечне."""
+        sequences = to_pynput_sequences("Shift+Print")
+        self.assertEqual(sequences[0], "<shift>+<print_screen>")
+
+    def test_variants_share_modifiers(self) -> None:
+        """Дополнительные варианты отличаются только символом клавиши."""
+        sequences = to_pynput_sequences("Ctrl+Shift+Print")
+        for sequence in sequences:
+            self.assertTrue(sequence.startswith("<ctrl>+<shift>+"))
+
+    def test_empty_combination_gives_nothing(self) -> None:
+        """Пустая настройка не порождает обозначений."""
+        self.assertEqual(to_pynput_sequences(""), [])
+
+    def test_lone_shift_is_not_expanded(self) -> None:
+        """Сочетание из одного модификатора вариантов не требует."""
+        self.assertEqual(to_pynput_sequences("Shift"), ["<shift>"])
+
+    def test_x11_names(self) -> None:
+        """Названия клавиш переводятся в обозначения протокола X11."""
+        self.assertEqual(_x11_key_name("print"), "Print")
+        self.assertEqual(_x11_key_name("pageup"), "Prior")
+        self.assertEqual(_x11_key_name("f7"), "F7")
+        self.assertEqual(_x11_key_name("r"), "r")
 
 
 if __name__ == "__main__":

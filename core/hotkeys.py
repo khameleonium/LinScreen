@@ -28,6 +28,32 @@ _MODIFIERS: dict[str, str] = {
     "win": "<cmd>",
 }
 
+# Соответствие названий клавиш обозначениям протокола X11. Требуется для
+# поиска символов, которые та же физическая клавиша выдаёт с Shift: часть
+# клавиш меняет символ полностью, например PrintScreen с Shift выдаёт
+# Sys_Req, и сочетание перестаёт совпадать.
+_X11_KEY_NAMES: dict[str, str] = {
+    "print": "Print",
+    "printscreen": "Print",
+    "prtsc": "Print",
+    "space": "space",
+    "tab": "Tab",
+    "esc": "Escape",
+    "escape": "Escape",
+    "enter": "Return",
+    "return": "Return",
+    "insert": "Insert",
+    "delete": "Delete",
+    "home": "Home",
+    "end": "End",
+    "pageup": "Prior",
+    "pagedown": "Next",
+    "up": "Up",
+    "down": "Down",
+    "left": "Left",
+    "right": "Right",
+}
+
 # Соответствие названий специальных клавиш формату pynput.
 _SPECIAL_KEYS: dict[str, str] = {
     "print": "<print_screen>",
@@ -75,6 +101,92 @@ def to_pynput_sequence(combination: str) -> str:
             # Обычный символ передаётся в нижнем регистре как есть.
             parts.append(key[:1])
     return "+".join(parts)
+
+
+def _x11_key_name(key: str) -> str:
+    """Обозначение клавиши в терминах протокола X11."""
+    if key in _X11_KEY_NAMES:
+        return _X11_KEY_NAMES[key]
+    if len(key) > 1 and key.startswith("f") and key[1:].isdigit():
+        return key.upper()
+    return key
+
+
+def shifted_keysyms(key: str) -> list[int]:
+    """
+    Символы, выдаваемые той же физической клавишей при нажатом Shift.
+
+    Раскладка клавиатуры сопоставляет одной клавише несколько символов по
+    уровням: без Shift, с Shift и так далее для каждой группы раскладок.
+    Перехватчик сравнивает именно символ, поэтому для сочетаний с Shift
+    требуются все его варианты. Нечётные уровни соответствуют нажатому
+    Shift.
+
+    При недоступности X11 возвращается пустой перечень: в сессии Wayland
+    перехват выполняется порталом, и эта поправка не нужна.
+    """
+    try:
+        from Xlib import XK, display as xdisplay
+    except ImportError:
+        return []
+
+    try:
+        connection = xdisplay.Display()
+    except Exception:  # noqa: BLE001 - отсутствие X11 не является ошибкой
+        return []
+
+    try:
+        base = XK.string_to_keysym(_x11_key_name(key))
+        if not base:
+            return []
+        keycode = connection.keysym_to_keycode(base)
+        if not keycode:
+            return []
+        # Нечётные уровни таблицы соответствуют нажатому Shift в каждой
+        # из групп раскладок.
+        found = {
+            connection.keycode_to_keysym(keycode, level) for level in (1, 3, 5, 7)
+        }
+        return sorted(value for value in found if value and value != base)
+    except Exception:  # noqa: BLE001 - любая ошибка означает отсутствие поправки
+        return []
+    finally:
+        try:
+            connection.close()
+        except Exception:  # noqa: BLE001 - соединение уже закрыто
+            pass
+
+
+def to_pynput_sequences(combination: str) -> list[str]:
+    """
+    Все обозначения сочетания, по которым его следует распознавать.
+
+    Кроме основного обозначения перечень содержит варианты с символами
+    верхнего уровня той же клавиши. Без них сочетания вида Shift+Print не
+    срабатывают: клавиатура выдаёт другой символ, и сравнение не проходит.
+    """
+    base = to_pynput_sequence(combination)
+    if not base:
+        return []
+
+    parts = [chunk.strip().lower() for chunk in combination.split("+") if chunk.strip()]
+    if "shift" not in parts or len(parts) < 2:
+        # Без Shift символ клавиши не меняется, поправка не требуется.
+        return [base]
+
+    main_key = parts[-1]
+    if main_key == "shift":
+        return [base]
+
+    sequences = [base]
+    prefix = base.rsplit("+", 1)[0]
+    for keysym in shifted_keysyms(main_key):
+        # Символ задаётся числом: в этом виде перехватчик принимает любые
+        # обозначения, включая отсутствующие в его собственной таблице.
+        variant = f"{prefix}+<{keysym}>"
+        if variant not in sequences:
+            sequences.append(variant)
+    return sequences
 
 
 class HotkeyManager(QObject):
@@ -139,12 +251,12 @@ class HotkeyManager(QObject):
 
         handlers: dict[str, object] = {}
         for action, combination in self._mapping.items():
-            sequence = to_pynput_sequence(combination)
-            if not sequence:
-                continue
-            # Замыкание фиксирует имя действия: сигнал испускается из
-            # потока перехватчика и доставляется очередью событий Qt.
-            handlers[sequence] = self._make_handler(action)
+            handler = self._make_handler(action)
+            for sequence in to_pynput_sequences(combination):
+                # Замыкание фиксирует имя действия: сигнал испускается из
+                # потока перехватчика и доставляется очередью событий Qt.
+                # Все обозначения одного сочетания ведут к одному действию.
+                handlers[sequence] = handler
 
         if not handlers:
             return
