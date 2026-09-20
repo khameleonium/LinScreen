@@ -36,11 +36,18 @@ MAXIMUM_DEPTH = 4
 
 # Состояние свёрнутого окна согласно соглашению ICCCM.
 ICONIC_STATE = 3
+# Состояние видимого окна согласно соглашению ICCCM.
+NORMAL_STATE = 1
+# Состояние скрытого/отозванного окна согласно соглашению ICCCM.
+WITHDRAWN_STATE = 0
 
 # Глубина, до которой проверяется состояние окна. Менеджер окон помещает
 # свойства на окно приложения, которое при наличии рамки оказывается её
 # потомком; глубже искать незачем.
 STATE_DEPTH = 2
+
+# Обозначение окна, отображаемого на всех рабочих столах согласно EWMH.
+ALL_DESKTOPS = 0xFFFFFFFF
 
 
 @dataclass(frozen=True)
@@ -77,14 +84,20 @@ def list_objects(limit_rect: QRect | None = None) -> list[InterfaceObject]:
 
     objects: list[InterfaceObject] = []
     try:
+        any_prop = X.AnyPropertyType
+        current_desktop_atom = connection.intern_atom("_NET_CURRENT_DESKTOP")
         atoms = _Atoms(
             wm_state=connection.intern_atom("WM_STATE"),
             net_state=connection.intern_atom("_NET_WM_STATE"),
             hidden=connection.intern_atom("_NET_WM_STATE_HIDDEN"),
-            any_property=X.AnyPropertyType,
+            any_property=any_prop,
+            net_desktop=connection.intern_atom("_NET_WM_DESKTOP"),
         )
         root = connection.screen().root
-        _collect(root, 0, 0, 0, objects, limit_rect, X.IsViewable, atoms)
+        current_desktop = _current_desktop(root, current_desktop_atom, any_prop)
+        _collect(
+            root, 0, 0, 0, objects, limit_rect, X.IsViewable, atoms, current_desktop
+        )
     except Exception:  # noqa: BLE001 - неполный обход лучше отказа
         pass
     finally:
@@ -103,35 +116,77 @@ class _Atoms:
     net_state: int
     hidden: int
     any_property: int
+    net_desktop: int = 0
 
 
-def _is_hidden(window: object, atoms: _Atoms, depth: int = 0) -> bool:
+def _current_desktop(root: object, atom: int, any_property: int) -> int | None:
+    """Индекс текущего активного рабочего стола согласно EWMH."""
+    try:
+        prop = root.get_full_property(atom, any_property)  # type: ignore[attr-defined]
+        if prop is not None and len(prop.value):
+            return int(prop.value[0])
+    except Exception:  # noqa: BLE001 - свойство может отсутствовать
+        pass
+    return None
+
+
+def _is_hidden(
+    window: object,
+    atoms: _Atoms,
+    current_desktop: int | None = None,
+    depth: int = 0,
+) -> bool:
     """
     Признак свёрнутого или скрытого окна.
 
-    Проверяются два свойства: состояние по соглашению ICCCM и перечень
-    состояний по соглашению EWMH. Свойства располагаются на окне самого
-    приложения, поэтому при наличии рамки проверка повторяется для её
-    потомков.
+    Проверяются свойства состояния согласно ICCCM и EWMH:
+    - состояние WM_STATE: видимым является только NormalState (1);
+      IconicState (3) и WithdrawnState (0) означают, что окно скрыто;
+    - наличие атома _NET_WM_STATE_HIDDEN в перечне _NET_WM_STATE;
+    - рабочий стол _NET_WM_DESKTOP: окно на неактивном рабочем столе не видно.
+
+    Свойства могут располагаться как на самом окне, так и на окне приложения
+    внутри рамки, поэтому при отсутствии признаков скрытия на текущем окне
+    проверка продолжается для его потомков.
     """
     try:
+        # Проверка состояния по соглашению ICCCM. Запрос выполняется с
+        # any_property для устойчивости к различиям типов у менеджеров окон.
         state = window.get_property(  # type: ignore[attr-defined]
-            atoms.wm_state, atoms.wm_state, 0, 4
+            atoms.wm_state, atoms.any_property, 0, 4
         )
-        if state is not None and len(state.value) and state.value[0] == ICONIC_STATE:
-            return True
+        if state is not None and len(state.value):
+            # Значение 1 соответствует NormalState. Любое иное значение
+            # (в частности, 3 — IconicState или 0 — WithdrawnState) означает,
+            # что окно свёрнуто либо скрыто.
+            if state.value[0] != NORMAL_STATE:
+                return True
 
+        # Проверка перечня состояний по соглашению EWMH. Наличие
+        # _NET_WM_STATE_HIDDEN указывает на свёрнутое окно.
         listed = window.get_full_property(  # type: ignore[attr-defined]
             atoms.net_state, atoms.any_property
         )
-        if listed is not None and atoms.hidden in listed.value:
-            return True
+        if listed is not None:
+            try:
+                if atoms.hidden in listed.value:
+                    return True
+            except (TypeError, ValueError):
+                pass
+
+        # Проверка текущего рабочего стола: окно на другом рабочем столе
+        # не должно считаться видимым на текущем экране.
+        if current_desktop is not None and atoms.net_desktop:
+            desktop_prop = window.get_full_property(  # type: ignore[attr-defined]
+                atoms.net_desktop, atoms.any_property
+            )
+            if desktop_prop is not None and len(desktop_prop.value):
+                win_desktop = desktop_prop.value[0]
+                if win_desktop != ALL_DESKTOPS and win_desktop != current_desktop:
+                    return True
     except Exception:  # noqa: BLE001 - окно могло исчезнуть между запросами
         return False
 
-    if state is not None and len(state.value):
-        # Состояние найдено и не является свёрнутым: искать глубже незачем.
-        return False
     if depth >= STATE_DEPTH:
         return False
 
@@ -139,9 +194,14 @@ def _is_hidden(window: object, atoms: _Atoms, depth: int = 0) -> bool:
         children = window.query_tree().children  # type: ignore[attr-defined]
     except Exception:  # noqa: BLE001 - окно исчезло во время обхода
         return False
-    # Рамка окна собственных состояний не несёт: их хранит окно приложения
-    # внутри неё.
-    return any(_is_hidden(child, atoms, depth + 1) for child in children)
+
+    # Рамка окна может не нести собственных признаков скрытия либо иметь
+    # NormalState, в то время как вложенное окно приложения свёрнуто.
+    # Если хотя бы один потомок скрыт, вся рамка считается скрытой.
+    return any(
+        _is_hidden(child, atoms, current_desktop, depth + 1)
+        for child in children
+    )
 
 
 def _collect(
@@ -153,6 +213,7 @@ def _collect(
     limit_rect: QRect | None,
     viewable: int,
     atoms: _Atoms,
+    current_desktop: int | None,
 ) -> None:
     """Рекурсивный обход дерева окон с накоплением границ."""
     if depth > MAXIMUM_DEPTH:
@@ -175,7 +236,7 @@ def _collect(
         except Exception:  # noqa: BLE001 - окно исчезло между запросами
             continue
 
-        if depth <= STATE_DEPTH and _is_hidden(child, atoms):
+        if _is_hidden(child, atoms, current_desktop):
             # Свёрнутое окно пропускается вместе со всем содержимым:
             # выделять то, чего не видно на экране, бессмысленно.
             continue
@@ -188,7 +249,9 @@ def _collect(
             if limit_rect is None or rect.intersects(limit_rect):
                 objects.append(InterfaceObject(rect, depth))
 
-        _collect(child, x, y, depth + 1, objects, limit_rect, viewable, atoms)
+        _collect(
+            child, x, y, depth + 1, objects, limit_rect, viewable, atoms, current_desktop
+        )
 
 
 def object_at(objects: list[InterfaceObject], point: QPoint) -> QRect | None:

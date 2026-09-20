@@ -70,10 +70,12 @@ class FakeWindow:
         self,
         wm_state: int | None = None,
         net_state: list[int] | None = None,
+        desktop: int | None = None,
         children: list["FakeWindow"] | None = None,
     ) -> None:
         self._wm_state = wm_state
         self._net_state = net_state
+        self._desktop = desktop
         self._children = children or []
 
     def get_property(
@@ -88,6 +90,8 @@ class FakeWindow:
         """Значение перечня состояний по соглашению EWMH."""
         if kind == ATOMS.net_state and self._net_state is not None:
             return FakeProperty(self._net_state)
+        if kind == ATOMS_WITH_DESKTOP.net_desktop and self._desktop is not None:
+            return FakeProperty([self._desktop])
         return None
 
     def query_tree(self) -> object:
@@ -96,6 +100,9 @@ class FakeWindow:
 
 
 ATOMS = _Atoms(wm_state=1, net_state=2, hidden=3, any_property=0)
+ATOMS_WITH_DESKTOP = _Atoms(
+    wm_state=1, net_state=2, hidden=3, any_property=0, net_desktop=4
+)
 
 
 class HiddenWindowTest(unittest.TestCase):
@@ -109,6 +116,10 @@ class HiddenWindowTest(unittest.TestCase):
         """Свёрнутое окно определяется по состоянию ICCCM."""
         self.assertTrue(_is_hidden(FakeWindow(wm_state=ICONIC_STATE), ATOMS))
 
+    def test_withdrawn_window_is_hidden(self) -> None:
+        """Скрытое/отозванное окно определяется по состоянию WithdrawnState."""
+        self.assertTrue(_is_hidden(FakeWindow(wm_state=0), ATOMS))
+
     def test_ewmh_hidden_is_recognised(self) -> None:
         """Скрытое окно определяется по перечню состояний EWMH."""
         self.assertTrue(_is_hidden(FakeWindow(wm_state=1, net_state=[3]), ATOMS))
@@ -116,6 +127,20 @@ class HiddenWindowTest(unittest.TestCase):
     def test_frame_inherits_child_state(self) -> None:
         """Рамка свёрнутого окна собственных состояний не несёт."""
         frame = FakeWindow(children=[FakeWindow(wm_state=ICONIC_STATE)])
+        self.assertTrue(_is_hidden(frame, ATOMS))
+
+    def test_frame_with_normal_state_inherits_iconic_child(self) -> None:
+        """Рамка с NormalState скрывается, если клиентское окно свернуто."""
+        frame = FakeWindow(
+            wm_state=1, children=[FakeWindow(wm_state=ICONIC_STATE)]
+        )
+        self.assertTrue(_is_hidden(frame, ATOMS))
+
+    def test_frame_with_normal_state_inherits_ewmh_hidden_child(self) -> None:
+        """Рамка с NormalState скрывается, если клиент имеет _NET_WM_STATE_HIDDEN."""
+        frame = FakeWindow(
+            wm_state=1, children=[FakeWindow(net_state=[3])]
+        )
         self.assertTrue(_is_hidden(frame, ATOMS))
 
     def test_frame_of_visible_window(self) -> None:
@@ -132,6 +157,34 @@ class HiddenWindowTest(unittest.TestCase):
         deep = FakeWindow(children=[FakeWindow(children=[
             FakeWindow(children=[FakeWindow(wm_state=ICONIC_STATE)])])])
         self.assertFalse(_is_hidden(deep, ATOMS))
+
+    def test_window_on_other_desktop_is_hidden(self) -> None:
+        """Окно на другом рабочем столе считается скрытым."""
+        win = FakeWindow(desktop=1)
+        self.assertTrue(
+            _is_hidden(win, ATOMS_WITH_DESKTOP, current_desktop=0)
+        )
+
+    def test_window_on_same_desktop_is_visible(self) -> None:
+        """Окно на текущем рабочем столе считается видимым."""
+        win = FakeWindow(wm_state=1, desktop=0)
+        self.assertFalse(
+            _is_hidden(win, ATOMS_WITH_DESKTOP, current_desktop=0)
+        )
+
+    def test_sticky_window_on_all_desktops_is_visible(self) -> None:
+        """Окно на всех рабочих столах (0xFFFFFFFF) считается видимым."""
+        win = FakeWindow(wm_state=1, desktop=0xFFFFFFFF)
+        self.assertFalse(
+            _is_hidden(win, ATOMS_WITH_DESKTOP, current_desktop=0)
+        )
+
+    def test_child_on_other_desktop_makes_frame_hidden(self) -> None:
+        """Рамка окна со скрытым рабочим столом у потомка скрывается."""
+        frame = FakeWindow(children=[FakeWindow(desktop=2)])
+        self.assertTrue(
+            _is_hidden(frame, ATOMS_WITH_DESKTOP, current_desktop=0)
+        )
 
 
 if __name__ == "__main__":
