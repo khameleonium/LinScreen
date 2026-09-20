@@ -29,7 +29,7 @@ from PySide6.QtWidgets import QApplication, QMessageBox
 from app import LinScreenApplication
 from ui.tray import TrayIcon
 
-APPLICATION_VERSION = "1.0"
+APPLICATION_VERSION = "1.2"
 
 # Число уже показанных сообщений об ошибке. Окно показывается только для
 # первой: повторяющийся сбой в обработчике событий иначе завалил бы экран
