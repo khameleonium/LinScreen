@@ -18,7 +18,7 @@ from typing import Callable
 
 from PySide6.QtCore import QObject, QRect, QTimer, QUrl
 from PySide6.QtGui import QDesktopServices, QGuiApplication, QImage
-from PySide6.QtWidgets import QApplication, QFileDialog
+from PySide6.QtWidgets import QApplication, QFileDialog, QWidget
 
 from capture.audio import AudioDevice, list_audio_devices, resolve_audio_inputs
 from capture.portal import (
@@ -72,6 +72,10 @@ from ui.tray import TrayIcon
 # неограниченный файл со временем занял бы заметное место.
 LOG_FILE_LIMIT = 1024 * 1024
 
+# Пауза между скрытием окон и запуском захвата. Composited-окружению
+# требуется время на перерисовку, иначе окно попадёт в первые кадры.
+HIDE_SETTLE_MS = 300
+
 
 def log_file_path() -> Path:
     """Путь файла журнала работы внешних процессов."""
@@ -110,6 +114,8 @@ class LinScreenApplication(QObject):
         # Глубина ограничена: приложение работает сутками без перезапуска.
         self._log_lines: deque[str] = deque(maxlen=2000)
         self._log_window: LogWindow | None = None
+        # Окна, скрытые на время записи и подлежащие возврату после неё.
+        self._hidden_windows: list[QWidget] = []
         self._settings_dialog: SettingsDialog | None = None
         # Признак ожидания завершения записи перед выходом из приложения.
         self._quit_after_recording = False
@@ -541,12 +547,59 @@ class LinScreenApplication(QObject):
         if job is None:
             return
 
+        if self._config.settings.general.hide_while_recording:
+            # Окна убираются до начала захвата и возвращаются после него:
+            # иначе они попали бы в первые кадры записи.
+            self._hide_windows()
+            QTimer.singleShot(HIDE_SETTLE_MS, lambda: self._begin_recording(job))
+            return
+        self._begin_recording(job)
+
+    def _begin_recording(self, job: RecordingJob) -> None:
+        """Запуск подготовленного задания записи."""
         try:
             self._recorder.start(job)
         except RuntimeError as error:
+            self._restore_windows()
             self._notify("Запись", str(error), is_error=True)
             return
+
+        if self._config.settings.general.hide_while_recording:
+            # Панель управления записью скрыта, поэтому способ остановки
+            # сообщается уведомлением.
+            stop_key = self._config.settings.hotkeys.record_stop
+            hint = f"клавиша {stop_key}" if stop_key else "меню значка в трее"
+            self._notify("Запись начата", f"Остановка: {hint}")
+            return
         self._recorder_bar.show_at_corner()
+
+    def _hide_windows(self) -> None:
+        """Скрытие собственных окон приложения на время записи."""
+        self._hidden_windows = []
+        windows: list[QWidget] = [self._recorder_bar, *self._editors]
+        if self._settings_dialog is not None:
+            windows.append(self._settings_dialog)
+        if self._log_window is not None:
+            windows.append(self._log_window)
+
+        for window in windows:
+            try:
+                if window.isVisible():
+                    window.hide()
+                    self._hidden_windows.append(window)
+            except RuntimeError:
+                # Окно уже уничтожено: возвращать нечего.
+                continue
+
+    def _restore_windows(self) -> None:
+        """Возврат скрытых окон после завершения записи."""
+        for window in self._hidden_windows:
+            try:
+                window.show()
+            except RuntimeError:
+                # Окно закрыли во время записи: восстановление не требуется.
+                continue
+        self._hidden_windows = []
 
     def _overrides(self) -> ProfileOverrides:
         """
@@ -703,6 +756,12 @@ class LinScreenApplication(QObject):
         self._recorder_bar.update_state(state)
         if state in (RecorderState.FINISHED, RecorderState.FAILED, RecorderState.IDLE):
             self._recorder_bar.hide()
+            # Панель записи закрывается всегда, прочие окна возвращаются
+            # в том виде, в каком были до начала записи.
+            self._hidden_windows = [
+                window for window in self._hidden_windows if window is not self._recorder_bar
+            ]
+            self._restore_windows()
 
     def _on_elapsed(self, milliseconds: int) -> None:
         """Обновление счётчиков длительности."""
@@ -846,6 +905,14 @@ class LinScreenApplication(QObject):
         QApplication.quit()
 
     def _notify(self, title: str, message: str, is_error: bool = False) -> None:
-        """Показ уведомления, если они не отключены настройками."""
-        if is_error or self._config.settings.general.show_notifications:
+        """
+        Показ уведомления с обязательной записью в журнал.
+
+        Сообщение попадает в журнал независимо от настройки, поэтому
+        отключение всплывающих окон не лишает пользователя сведений о
+        происходящем: их видно в окне журнала и в файле.
+        """
+        mark = "ОШИБКА" if is_error else "Сообщение"
+        self._append_log(f"{mark}: {title}: {message}")
+        if self._config.settings.general.show_notifications:
             self._tray.notify(title, message, is_error)

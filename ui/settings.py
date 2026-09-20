@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import Signal
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -26,6 +26,7 @@ from PySide6.QtWidgets import (
     QPlainTextEdit,
     QPushButton,
     QRadioButton,
+    QMessageBox,
     QSpinBox,
     QTabWidget,
     QVBoxLayout,
@@ -43,7 +44,13 @@ from core.config import ConfigManager
 from core.session import DesktopSession
 from core.workers import run_async
 from encoder.images import FORMAT_TITLES
-from encoder.profiles import AudioCodec, AudioMode, VideoCodec, VideoProfileManager
+from encoder.profiles import (
+    AudioCodec,
+    AudioMode,
+    ProfileOverrides,
+    VideoCodec,
+    VideoProfileManager,
+)
 
 
 class PathChooser(QWidget):
@@ -154,9 +161,23 @@ class SettingsDialog(QDialog):
         self._open_editor.setChecked(settings.general.open_editor_after_capture)
         form.addRow(self._open_editor)
 
-        self._notifications = QCheckBox("Показывать уведомления")
+        self._notifications = QCheckBox("Показывать всплывающие уведомления")
         self._notifications.setChecked(settings.general.show_notifications)
+        self._notifications.setToolTip(
+            "Отключение убирает всплывающие окна. Сообщения продолжают "
+            "записываться в журнал и в файл журнала."
+        )
         form.addRow(self._notifications)
+
+        self._hide_while_recording = QCheckBox(
+            "Скрывать окна программы во время записи"
+        )
+        self._hide_while_recording.setChecked(settings.general.hide_while_recording)
+        self._hide_while_recording.setToolTip(
+            "Панель записи и окна программы не попадут в кадр. "
+            "Управление остаётся через значок в трее и горячие клавиши."
+        )
+        form.addRow(self._hide_while_recording)
 
         self._delay = QSpinBox()
         self._delay.setRange(0, 15000)
@@ -175,6 +196,28 @@ class SettingsDialog(QDialog):
         self._menu_entry.setChecked(menu_entry_installed())
         form.addRow(self._menu_entry)
 
+        # Перенос настроек: файл целиком копируется в выбранное место и
+        # обратно, что позволяет держать несколько наборов и переносить
+        # их между машинами.
+        transfer = QHBoxLayout()
+        transfer.setContentsMargins(0, 0, 0, 0)
+        export_button = QPushButton("Экспорт настроек…")
+        export_button.clicked.connect(self._export_settings)
+        import_button = QPushButton("Импорт настроек…")
+        import_button.clicked.connect(self._import_settings)
+        transfer.addWidget(export_button)
+        transfer.addWidget(import_button)
+        transfer_widget = QWidget()
+        transfer_widget.setLayout(transfer)
+        form.addRow("Перенос настроек:", transfer_widget)
+
+        location = QLabel(f"Файл настроек: {self._config.path}")
+        location.setWordWrap(True)
+        location.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+        )
+        form.addRow(location)
+
         summary = QLabel(
             f"Тип сессии: {self._session.session_type.label}"
             + (f"\n{self._diagnostics}" if self._diagnostics else "")
@@ -182,6 +225,45 @@ class SettingsDialog(QDialog):
         summary.setWordWrap(True)
         form.addRow(summary)
         return page
+
+    def _export_settings(self) -> None:
+        """Сохранение копии настроек в выбранный файл."""
+        # Перед выгрузкой применяются значения из полей окна, иначе в
+        # копию попали бы прежние настройки.
+        self._collect()
+        suggested = str(Path.home() / "linscreen-настройки.ini")
+        chosen, _filter = QFileDialog.getSaveFileName(
+            self, "Экспорт настроек", suggested, "Файлы настроек (*.ini)"
+        )
+        if not chosen:
+            return
+        try:
+            self._config.export_to(Path(chosen))
+        except OSError as error:
+            QMessageBox.warning(self, "Экспорт настроек", f"Не удалось записать: {error}")
+            return
+        QMessageBox.information(self, "Экспорт настроек", f"Сохранено: {chosen}")
+
+    def _import_settings(self) -> None:
+        """Чтение настроек из выбранного файла с закрытием окна."""
+        chosen, _filter = QFileDialog.getOpenFileName(
+            self, "Импорт настроек", str(Path.home()), "Файлы настроек (*.ini *.conf)"
+        )
+        if not chosen:
+            return
+        try:
+            self._config.import_from(Path(chosen))
+        except (OSError, ValueError) as error:
+            QMessageBox.warning(self, "Импорт настроек", f"Не удалось прочитать: {error}")
+            return
+
+        # Поля окна отражают прежние значения, поэтому окно закрывается:
+        # приложение применяет прочитанные настройки целиком.
+        QMessageBox.information(
+            self, "Импорт настроек", "Настройки прочитаны и применены."
+        )
+        self.settingsSaved.emit()
+        self.accept()
 
     def _build_image_tab(self) -> QWidget:
         """Вкладка параметров сохранения снимков."""
@@ -278,6 +360,20 @@ class SettingsDialog(QDialog):
         settings = self._config.settings.encoding
         page = QWidget()
         form = QFormLayout(page)
+
+        # Название профиля и пояснение: без них непонятно, о каком именно
+        # профиле идёт речь в вариантах «как в профиле».
+        self._profile_title = QLabel()
+        self._profile_title.setWordWrap(True)
+        form.addRow(self._profile_title)
+
+        explanation = QLabel(
+            "Значения ниже уточняют выбранный профиль записи. Вариант "
+            "«как в профиле» показывает в скобках, что именно задаёт сам "
+            "профиль. Профиль выбирается на вкладке «Запись»."
+        )
+        explanation.setWordWrap(True)
+        form.addRow(explanation)
 
         # --- Видео ---
         self._video_codec = QComboBox()
@@ -404,10 +500,12 @@ class SettingsDialog(QDialog):
         self._use_custom = QCheckBox("Использовать свою команду")
         self._use_custom.setChecked(settings.use_custom_command)
         self._use_custom.toggled.connect(self._update_custom_controls)
+        self._use_custom.toggled.connect(self._refresh_encoding_info)
         form.addRow(self._use_custom)
 
         self._custom_command = QPlainTextEdit(settings.custom_command)
-        self._custom_command.setMinimumHeight(90)
+        self._custom_command.setMinimumHeight(70)
+        self._custom_command.setMaximumHeight(110)
         font = QFont("monospace")
         font.setStyleHint(QFont.StyleHint.TypeWriter)
         self._custom_command.setFont(font)
@@ -423,6 +521,18 @@ class SettingsDialog(QDialog):
         hint.setWordWrap(True)
         form.addRow(hint)
 
+        self._preview = QPlainTextEdit()
+        self._preview.setReadOnly(True)
+        self._preview.setMaximumHeight(96)
+        preview_font = QFont("monospace")
+        preview_font.setStyleHint(QFont.StyleHint.TypeWriter)
+        preview_font.setPointSize(8)
+        self._preview.setFont(preview_font)
+        self._preview.setToolTip(
+            "Команда, которая будет выполнена с учётом профиля и уточнений."
+        )
+        form.addRow("Итоговая команда:", self._preview)
+
         buttons = QHBoxLayout()
         buttons.setContentsMargins(0, 0, 0, 0)
         fill = QPushButton("Подставить текущую команду")
@@ -435,8 +545,151 @@ class SettingsDialog(QDialog):
         container.setLayout(buttons)
         form.addRow(container)
 
+        # Любое изменение полей отражается в сведениях о профиле и в
+        # предпросмотре команды, поэтому подписка оформляется на все.
+        self._video_codec.currentIndexChanged.connect(self._refresh_encoding_info)
+        self._audio_codec.currentIndexChanged.connect(self._refresh_encoding_info)
+        self._crf.valueChanged.connect(self._refresh_encoding_info)
+        self._keyint.valueChanged.connect(self._refresh_encoding_info)
+        self._audio_rate.valueChanged.connect(self._refresh_encoding_info)
+        self._audio_channels.valueChanged.connect(self._refresh_encoding_info)
+        self._video_bitrate.textChanged.connect(self._refresh_encoding_info)
+        self._audio_bitrate.textChanged.connect(self._refresh_encoding_info)
+        self._extra_args.textChanged.connect(self._refresh_encoding_info)
+        self._preset.currentTextChanged.connect(self._refresh_encoding_info)
+        self._pix_fmt.currentTextChanged.connect(self._refresh_encoding_info)
+        self._rate_crf.toggled.connect(self._refresh_encoding_info)
+        # Смена профиля и источника звука задаётся на вкладке «Запись».
+        self._profile.currentIndexChanged.connect(self._refresh_encoding_info)
+        self._audio_mode.currentIndexChanged.connect(self._refresh_encoding_info)
+
         self._update_custom_controls()
+        self._refresh_encoding_info()
         return page
+
+    def _selected_profile(self):  # type: ignore[no-untyped-def]
+        """
+        Выбранный на вкладке «Запись» профиль либо пустое значение.
+
+        Для профилей анимации видеопрофиль не определён: запись ведётся
+        промежуточным профилем без потерь с последующей сборкой.
+        """
+        identifier = str(self._profile.currentData())
+        animation_ids = {item.identifier for item in self._profiles.animation_profiles()}
+        if identifier in animation_ids:
+            return None
+        try:
+            return self._profiles.video_profile(identifier)
+        except KeyError:
+            return None
+
+    def _current_overrides(self) -> ProfileOverrides:
+        """
+        Уточнения, набранные в полях окна.
+
+        Значения берутся из виджетов, а не из сохранённых настроек: это
+        позволяет показывать итоговую команду до нажатия кнопки сохранения.
+        """
+
+        def as_enum(value, kind):  # type: ignore[no-untyped-def]
+            """Преобразование значения поля в элемент перечисления."""
+            if not value:
+                return None
+            try:
+                return kind(value)
+            except ValueError:
+                return None
+
+        return ProfileOverrides(
+            video_codec=as_enum(self._video_codec.currentData(), VideoCodec),
+            audio_codec=as_enum(self._audio_codec.currentData(), AudioCodec),
+            rate_mode="crf" if self._rate_crf.isChecked() else "bitrate",
+            crf=self._crf.value() or None,
+            video_bitrate=self._video_bitrate.text().strip(),
+            preset=self._preset.currentText().strip(),
+            keyint=self._keyint.value() or None,
+            pix_fmt=self._pix_fmt.currentText().strip(),
+            audio_bitrate=self._audio_bitrate.text().strip(),
+            audio_sample_rate=self._audio_rate.value() or None,
+            audio_channels=self._audio_channels.value() or None,
+            extra_args=self._extra_args.text().strip(),
+        )
+
+    def _audio_source_count(self) -> tuple[AudioMode, int]:
+        """Выбранный режим звука и число задействованных источников."""
+        try:
+            mode = AudioMode(str(self._audio_mode.currentData()))
+        except ValueError:
+            mode = AudioMode.NONE
+        sources = {AudioMode.NONE: 0, AudioMode.SEPARATE: 2, AudioMode.MIX: 2}.get(mode, 1)
+        return mode, sources
+
+    def _refresh_encoding_info(self) -> None:
+        """Обновление сведений о профиле и предпросмотра команды."""
+        profile = self._selected_profile()
+        if profile is None:
+            identifier = str(self._profile.currentData())
+            self._profile_title.setText(
+                f"<b>Профиль записи:</b> {self._profile.currentText()}<br>"
+                "Анимация собирается в несколько проходов: сначала запись без "
+                "потерь, затем сборка. Параметры ниже к ней не применяются."
+            )
+            self._preview.setPlainText(
+                "Для профиля анимации единой команды записи не существует: "
+                f"используется промежуточная запись и сборка формата {identifier}."
+            )
+            return
+
+        container = profile.container.value.upper()
+        self._profile_title.setText(
+            f"<b>Профиль записи:</b> {profile.title}<br>"
+            f"Контейнер {container}, видео {profile.video_codec.encoder}, "
+            f"звук {profile.audio_codec.encoder}, "
+            f"качество CRF {profile.crf if profile.crf is not None else '—'}, "
+            f"пресет {profile.preset}, ключевые кадры {profile.keyint}"
+        )
+
+        # Подписи полей дополняются значениями профиля: пользователю видно,
+        # что именно подразумевает вариант «как в профиле».
+        pix_fmt = profile.pix_fmt or profile.video_codec.default_pix_fmt
+        self._video_codec.setItemText(0, f"Как в профиле ({profile.video_codec.encoder})")
+        self._audio_codec.setItemText(0, f"Как в профиле ({profile.audio_codec.encoder})")
+        self._crf.setSpecialValueText(
+            f"как в профиле ({profile.crf if profile.crf is not None else 'не задан'})"
+        )
+        self._keyint.setSpecialValueText(f"как в профиле ({profile.keyint})")
+        self._audio_rate.setSpecialValueText(f"как в профиле ({profile.audio_sample_rate})")
+        self._audio_channels.setSpecialValueText(f"как в профиле ({profile.audio_channels})")
+        self._video_bitrate.setPlaceholderText(
+            f"как в профиле ({profile.video_bitrate or 'не задан'})"
+        )
+        self._audio_bitrate.setPlaceholderText(f"как в профиле ({profile.audio_bitrate})")
+        line_edit = self._preset.lineEdit()
+        if line_edit is not None:
+            line_edit.setPlaceholderText(f"как в профиле ({profile.preset})")
+        pix_edit = self._pix_fmt.lineEdit()
+        if pix_edit is not None:
+            pix_edit.setPlaceholderText(f"как в профиле ({pix_fmt})")
+
+        if self._use_custom.isChecked():
+            self._preview.setPlainText(
+                "Используется собственная команда из поля выше; "
+                "параметры этой вкладки не применяются."
+            )
+            return
+
+        mode, sources = self._audio_source_count()
+        adjusted = self._profiles.apply_overrides(profile, self._current_overrides())
+        resolved = self._profiles.resolve(adjusted)
+        note = ""
+        if resolved.video_codec is not adjusted.video_codec:
+            note = (
+                f"\n\nЭнкодер {adjusted.video_codec.encoder} отсутствует в сборке "
+                f"и будет заменён на {resolved.video_codec.encoder}."
+            )
+        self._preview.setPlainText(
+            self._profiles.build_command_template(resolved, mode, sources) + note
+        )
 
     def _update_rate_controls(self) -> None:
         """Согласование полей качества с выбранным способом."""
@@ -564,6 +817,22 @@ class SettingsDialog(QDialog):
 
     def _apply(self) -> None:
         """Перенос введённых значений в конфигурацию и сохранение."""
+        self._collect()
+
+        # Автозапуск и ярлык хранятся файлами в системе, а не в
+        # конфигурации, поэтому применяются отдельно от прочих настроек.
+        from ui.tray import install_application_icon
+
+        icon = install_application_icon()
+        autostart_set(self._autostart.isChecked(), icon)
+        set_menu_entry(self._menu_entry.isChecked(), icon)
+
+        self._config.save()
+        self.settingsSaved.emit()
+        self.accept()
+
+    def _collect(self) -> None:
+        """Перенос значений полей окна в набор настроек без сохранения."""
         settings = self._config.settings
 
         settings.paths.images_dir = self._images_dir.value()
@@ -575,6 +844,7 @@ class SettingsDialog(QDialog):
         settings.general.copy_to_clipboard = self._copy_clipboard.isChecked()
         settings.general.open_editor_after_capture = self._open_editor.isChecked()
         settings.general.show_notifications = self._notifications.isChecked()
+        settings.general.hide_while_recording = self._hide_while_recording.isChecked()
         settings.general.capture_delay_ms = self._delay.value()
 
         settings.images.image_format = str(self._image_format.currentData())
@@ -609,15 +879,3 @@ class SettingsDialog(QDialog):
 
         for name, field in self._hotkey_fields.items():
             setattr(settings.hotkeys, name, field.text().strip())
-
-        # Автозапуск и ярлык хранятся файлами в системе, а не в
-        # конфигурации, поэтому применяются отдельно от прочих настроек.
-        from ui.tray import install_application_icon
-
-        icon = install_application_icon()
-        autostart_set(self._autostart.isChecked(), icon)
-        set_menu_entry(self._menu_entry.isChecked(), icon)
-
-        self._config.save()
-        self.settingsSaved.emit()
-        self.accept()
