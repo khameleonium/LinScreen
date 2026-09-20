@@ -6,7 +6,7 @@ import unittest
 
 from PySide6.QtCore import QPoint, QRect
 
-from capture.windows import InterfaceObject, object_at
+from capture.windows import ICONIC_STATE, InterfaceObject, _Atoms, _is_hidden, object_at
 
 
 def make(x: int, y: int, width: int, height: int, depth: int = 0) -> InterfaceObject:
@@ -54,6 +54,84 @@ class ObjectSearchTest(unittest.TestCase):
     def test_area_is_computed(self) -> None:
         """Площадь объекта считается по его границам."""
         self.assertEqual(make(0, 0, 40, 30).area, 1200)
+
+
+class FakeProperty:
+    """Ответ X-сервера на запрос свойства окна."""
+
+    def __init__(self, value: list[int]) -> None:
+        self.value = value
+
+
+class FakeWindow:
+    """Окно X11 с заданными свойствами и потомками."""
+
+    def __init__(
+        self,
+        wm_state: int | None = None,
+        net_state: list[int] | None = None,
+        children: list["FakeWindow"] | None = None,
+    ) -> None:
+        self._wm_state = wm_state
+        self._net_state = net_state
+        self._children = children or []
+
+    def get_property(
+        self, kind: int, _type: int, _offset: int, _length: int
+    ) -> FakeProperty | None:
+        """Значение свойства состояния по соглашению ICCCM."""
+        if kind == ATOMS.wm_state and self._wm_state is not None:
+            return FakeProperty([self._wm_state, 0])
+        return None
+
+    def get_full_property(self, kind: int, _type: int) -> FakeProperty | None:
+        """Значение перечня состояний по соглашению EWMH."""
+        if kind == ATOMS.net_state and self._net_state is not None:
+            return FakeProperty(self._net_state)
+        return None
+
+    def query_tree(self) -> object:
+        """Потомки окна."""
+        return type("Tree", (), {"children": self._children})()
+
+
+ATOMS = _Atoms(wm_state=1, net_state=2, hidden=3, any_property=0)
+
+
+class HiddenWindowTest(unittest.TestCase):
+    """Определение свёрнутых и скрытых окон."""
+
+    def test_normal_window_is_visible(self) -> None:
+        """Окно в обычном состоянии считается видимым."""
+        self.assertFalse(_is_hidden(FakeWindow(wm_state=1), ATOMS))
+
+    def test_iconic_window_is_hidden(self) -> None:
+        """Свёрнутое окно определяется по состоянию ICCCM."""
+        self.assertTrue(_is_hidden(FakeWindow(wm_state=ICONIC_STATE), ATOMS))
+
+    def test_ewmh_hidden_is_recognised(self) -> None:
+        """Скрытое окно определяется по перечню состояний EWMH."""
+        self.assertTrue(_is_hidden(FakeWindow(wm_state=1, net_state=[3]), ATOMS))
+
+    def test_frame_inherits_child_state(self) -> None:
+        """Рамка свёрнутого окна собственных состояний не несёт."""
+        frame = FakeWindow(children=[FakeWindow(wm_state=ICONIC_STATE)])
+        self.assertTrue(_is_hidden(frame, ATOMS))
+
+    def test_frame_of_visible_window(self) -> None:
+        """Рамка обычного окна видимой и остаётся."""
+        frame = FakeWindow(children=[FakeWindow(wm_state=1)])
+        self.assertFalse(_is_hidden(frame, ATOMS))
+
+    def test_window_without_state_is_visible(self) -> None:
+        """Окно без свойств состояния скрытым не считается."""
+        self.assertFalse(_is_hidden(FakeWindow(), ATOMS))
+
+    def test_search_does_not_go_too_deep(self) -> None:
+        """Поиск состояния ограничен по глубине вложенности."""
+        deep = FakeWindow(children=[FakeWindow(children=[
+            FakeWindow(children=[FakeWindow(wm_state=ICONIC_STATE)])])])
+        self.assertFalse(_is_hidden(deep, ATOMS))
 
 
 if __name__ == "__main__":
