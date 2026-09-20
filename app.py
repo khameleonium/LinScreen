@@ -567,7 +567,7 @@ class LinScreenApplication(QObject):
         if self._config.settings.general.hide_while_recording:
             # Панель управления записью скрыта, поэтому способ остановки
             # сообщается уведомлением.
-            stop_key = self._config.settings.hotkeys.record_stop
+            stop_key = self._config.settings.hotkeys.record_toggle
             hint = f"клавиша {stop_key}" if stop_key else "меню значка в трее"
             self._notify("Запись начата", f"Остановка: {hint}")
             return
@@ -737,6 +737,27 @@ class LinScreenApplication(QObject):
         self._config.save()
         self._notify("Источник звука", mode.label)
 
+    def toggle_recording(self) -> None:
+        """
+        Начало записи области либо остановка уже идущей.
+
+        Одно сочетание клавиш обслуживает оба действия: во время записи
+        собственные окна программы скрыты, и отдельная клавиша остановки
+        только усложняла бы запоминание.
+        """
+        if self._recorder.state in (
+            RecorderState.RECORDING,
+            RecorderState.PAUSED,
+            RecorderState.STARTING,
+        ):
+            self.stop_recording()
+            return
+        if self._recorder.state is RecorderState.PROCESSING:
+            # Предыдущая запись ещё собирается: новая начнётся после неё.
+            self._notify("Запись", "Идёт обработка предыдущей записи")
+            return
+        self.start_recording(CaptureMode.REGION)
+
     def toggle_pause(self) -> None:
         """Переключение паузы записи."""
         if self._recorder.state is RecorderState.RECORDING:
@@ -790,9 +811,8 @@ class LinScreenApplication(QObject):
             "screenshot_region": lambda: self.take_screenshot(CaptureMode.REGION),
             "screenshot_fullscreen": lambda: self.take_screenshot(CaptureMode.FULLSCREEN),
             "screenshot_window": lambda: self.take_screenshot(CaptureMode.WINDOW),
-            "record_region": lambda: self.start_recording(CaptureMode.REGION),
+            "record_toggle": self.toggle_recording,
             "record_toggle_pause": self.toggle_pause,
-            "record_stop": self.stop_recording,
         }
         handler = handlers.get(action)
         if handler is not None:

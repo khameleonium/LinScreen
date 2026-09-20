@@ -129,9 +129,10 @@ class HotkeySettings:
     screenshot_region: str = "Print"
     screenshot_fullscreen: str = "Shift+Print"
     screenshot_window: str = "Alt+Print"
-    record_region: str = "Ctrl+Alt+R"
+    # Одно сочетание начинает запись и останавливает её: отдельная клавиша
+    # остановки не нужна, а запоминать приходится вдвое меньше.
+    record_toggle: str = "Ctrl+Alt+R"
     record_toggle_pause: str = "Ctrl+Alt+P"
-    record_stop: str = "Ctrl+Alt+S"
 
     def as_mapping(self) -> dict[str, str]:
         """Соответствие имени действия и сочетания клавиш."""
@@ -231,9 +232,9 @@ FIELD_COMMENTS: dict[str, dict[str, str]] = {
         "screenshot_region": "Снимок выделенной области",
         "screenshot_fullscreen": "Снимок всего экрана",
         "screenshot_window": "Снимок активного окна",
-        "record_region": "Начать запись области",
+        "record_toggle": "Начать запись области и остановить её тем же "
+        "сочетанием",
         "record_toggle_pause": "Пауза и продолжение записи",
-        "record_stop": "Остановить запись",
     },
     "general": {
         "ffmpeg_path": "Путь к FFmpeg. Пусто — вложенный либо системный",
@@ -245,6 +246,12 @@ FIELD_COMMENTS: dict[str, dict[str, str]] = {
         "во время записи: да или нет",
         "capture_delay_ms": "Задержка перед снимком в миллисекундах",
     },
+}
+
+# Прежние имена значений, принимаемые при чтении файла. Позволяют
+# сохранить настройки пользователя после переименования параметра.
+FIELD_ALIASES: dict[str, dict[str, tuple[str, ...]]] = {
+    "hotkeys": {"record_toggle": ("record_region",)},
 }
 
 # Обозначения истины и лжи в файле настроек.
@@ -328,10 +335,18 @@ def parse_ini(text: str, settings: "Settings") -> None:
         group = getattr(settings, section.name)
         if not is_dataclass(group):
             continue
+        aliases = FIELD_ALIASES.get(section.name, {})
         for item in fields(group):
-            if not parser.has_option(section.name, item.name):
+            # Значение ищется под текущим именем, а при его отсутствии -
+            # под прежними, чтобы переименование параметра не сбрасывало
+            # настройку пользователя.
+            names = (item.name, *aliases.get(item.name, ()))
+            found = next(
+                (name for name in names if parser.has_option(section.name, name)), None
+            )
+            if found is None:
                 continue
-            raw = parser.get(section.name, item.name)
+            raw = parser.get(section.name, found)
             current = getattr(group, item.name)
             setattr(group, item.name, _parse_value(current, raw))
 

@@ -103,12 +103,29 @@ class ConfigPersistenceTest(unittest.TestCase):
         self.assertTrue(self.path.is_file())
         self.assertTrue(legacy.is_file())
 
+    def test_previous_hotkey_name_is_accepted(self) -> None:
+        """Сочетание, записанное под прежним именем, не теряется."""
+        self.path.write_text(
+            "[hotkeys]\nrecord_region = Ctrl+Alt+G\n", encoding="utf-8"
+        )
+        settings = ConfigManager(self.path).load()
+        self.assertEqual(settings.hotkeys.record_toggle, "Ctrl+Alt+G")
+
+    def test_current_hotkey_name_wins(self) -> None:
+        """При наличии обоих имён используется текущее."""
+        self.path.write_text(
+            "[hotkeys]\nrecord_region = Ctrl+Alt+G\nrecord_toggle = Ctrl+Alt+H\n",
+            encoding="utf-8",
+        )
+        settings = ConfigManager(self.path).load()
+        self.assertEqual(settings.hotkeys.record_toggle, "Ctrl+Alt+H")
+
     def test_export_and_import(self) -> None:
         """Настройки переносятся через файл и накладываются на текущие."""
         source = ConfigManager(self.path)
         source.load()
         source.settings.video.fps = 48
-        source.settings.hotkeys.record_stop = "Ctrl+Alt+Q"
+        source.settings.hotkeys.record_toggle = "Ctrl+Alt+Q"
         transferred = self.path.with_name("перенос.ini")
         source.export_to(transferred)
         self.assertTrue(transferred.is_file())
@@ -118,7 +135,7 @@ class ConfigPersistenceTest(unittest.TestCase):
         self.assertNotEqual(target.settings.video.fps, 48)
         target.import_from(transferred)
         self.assertEqual(target.settings.video.fps, 48)
-        self.assertEqual(target.settings.hotkeys.record_stop, "Ctrl+Alt+Q")
+        self.assertEqual(target.settings.hotkeys.record_toggle, "Ctrl+Alt+Q")
         # Прочитанные настройки сразу сохраняются в рабочий файл.
         self.assertTrue(target.path.is_file())
 

@@ -772,9 +772,8 @@ class SettingsDialog(QDialog):
             "screenshot_region": "Снимок области:",
             "screenshot_fullscreen": "Снимок всего экрана:",
             "screenshot_window": "Снимок активного окна:",
-            "record_region": "Начать запись области:",
+            "record_toggle": "Запись области (старт и стоп):",
             "record_toggle_pause": "Пауза записи:",
-            "record_stop": "Остановить запись:",
         }
         self._hotkey_fields: dict[str, HotkeyEdit] = {}
         for name, title in titles.items():
