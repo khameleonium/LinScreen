@@ -80,7 +80,10 @@ class TrayIcon(QObject):
     # Служебные действия.
     settingsRequested = Signal()
     logRequested = Signal()
-    openFolderRequested = Signal()
+    # Каталоги снимков и записей открываются по отдельности: они
+    # настраиваются независимо и чаще всего различаются.
+    openImagesFolderRequested = Signal()
+    openVideosFolderRequested = Signal()
     quitRequested = Signal()
 
     def __init__(self, parent: QObject | None = None) -> None:
@@ -129,7 +132,8 @@ class TrayIcon(QObject):
         self._stop_action = self._add_action("Остановить запись", self.stopRequested.emit)
 
         self._menu.addSeparator()
-        self._add_action("Открыть папку с файлами", self.openFolderRequested.emit)
+        self._add_action("Папка со снимками", self.openImagesFolderRequested.emit)
+        self._add_action("Папка с записями", self.openVideosFolderRequested.emit)
         self._add_action("Журнал…", self.logRequested.emit)
         self._add_action("Настройки…", self.settingsRequested.emit)
         self._menu.addSeparator()

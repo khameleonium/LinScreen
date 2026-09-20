@@ -179,7 +179,8 @@ class LinScreenApplication(QObject):
         self._tray.stopRequested.connect(self.stop_recording)
         self._tray.settingsRequested.connect(self.open_settings)
         self._tray.logRequested.connect(self.open_log)
-        self._tray.openFolderRequested.connect(self.open_output_folder)
+        self._tray.openImagesFolderRequested.connect(self.open_images_folder)
+        self._tray.openVideosFolderRequested.connect(self.open_videos_folder)
         self._tray.quitRequested.connect(self.quit)
 
         self._recorder.stateChanged.connect(self._on_state_changed)
@@ -904,10 +905,23 @@ class LinScreenApplication(QObject):
         self._tray.set_audio_mode(self._audio_mode())
         self._notify("Настройки", "Изменения сохранены")
 
-    def open_output_folder(self) -> None:
-        """Открытие каталога сохранения в файловом менеджере."""
-        directory = self._config.images_dir()
-        directory.mkdir(parents=True, exist_ok=True)
+    def open_images_folder(self) -> None:
+        """Открытие каталога снимков в файловом менеджере."""
+        self._open_folder(self._config.images_dir())
+
+    def open_videos_folder(self) -> None:
+        """Открытие каталога записей в файловом менеджере."""
+        self._open_folder(self._config.videos_dir())
+
+    def _open_folder(self, directory: Path) -> None:
+        """Показ каталога в файловом менеджере рабочего стола."""
+        try:
+            # Каталог мог ещё не существовать: до первого сохранения он
+            # не создаётся, а открыть его пользователь вправе и раньше.
+            directory.mkdir(parents=True, exist_ok=True)
+        except OSError as error:
+            self._notify("Открытие папки", str(error), is_error=True)
+            return
         QDesktopServices.openUrl(QUrl.fromLocalFile(str(directory)))
 
     def quit(self) -> None:
