@@ -4,7 +4,12 @@ from __future__ import annotations
 
 import unittest
 
-from core.hotkeys import _x11_key_name, to_pynput_sequence, to_pynput_sequences
+from core.hotkeys import (
+    _x11_key_name,
+    parse_combination,
+    to_pynput_sequence,
+    to_pynput_sequences,
+)
 
 
 class HotkeyConversionTest(unittest.TestCase):
@@ -72,6 +77,52 @@ class ShiftVariantTest(unittest.TestCase):
         self.assertEqual(_x11_key_name("pageup"), "Prior")
         self.assertEqual(_x11_key_name("f7"), "F7")
         self.assertEqual(_x11_key_name("r"), "r")
+
+
+class ExactMatchTest(unittest.TestCase):
+    """Разбор сочетания на модификаторы и основную клавишу."""
+
+    def test_plain_key_has_no_modifiers(self) -> None:
+        """Сочетание без модификаторов не должно иметь их в наборе."""
+        parsed = parse_combination("Print")
+        self.assertEqual(parsed.modifiers, frozenset())
+        self.assertIn("print_screen", parsed.keys)
+
+    def test_modifiers_are_collected(self) -> None:
+        """Все модификаторы сочетания попадают в набор."""
+        parsed = parse_combination("Ctrl+Alt+R")
+        self.assertEqual(parsed.modifiers, frozenset({"ctrl", "alt"}))
+        self.assertIn("r", parsed.keys)
+
+    def test_same_key_differs_by_modifiers(self) -> None:
+        """Одна клавиша с разными модификаторами даёт разные сочетания."""
+        plain = parse_combination("Print")
+        with_ctrl = parse_combination("Ctrl+Print")
+        self.assertNotEqual(plain.modifiers, with_ctrl.modifiers)
+        self.assertEqual(plain.keys & with_ctrl.keys, frozenset({"print_screen"}))
+
+    def test_shift_adds_upper_level_symbols(self) -> None:
+        """Для сочетаний с Shift учитываются символы верхнего уровня."""
+        parsed = parse_combination("Shift+Print")
+        self.assertEqual(parsed.modifiers, frozenset({"shift"}))
+        # Кроме основного обозначения перечень содержит числовые коды.
+        self.assertIn("print_screen", parsed.keys)
+
+    def test_function_key(self) -> None:
+        """Функциональная клавиша распознаётся как основная."""
+        parsed = parse_combination("Ctrl+Shift+F9")
+        self.assertEqual(parsed.modifiers, frozenset({"ctrl", "shift"}))
+        self.assertIn("f9", parsed.keys)
+
+    def test_empty_combination_is_invalid(self) -> None:
+        """Пустая настройка не порождает пригодного сочетания."""
+        self.assertFalse(parse_combination("").is_valid)
+
+    def test_lone_modifier_is_a_key(self) -> None:
+        """Сочетание из одного модификатора считается клавишей."""
+        parsed = parse_combination("Shift")
+        self.assertEqual(parsed.modifiers, frozenset())
+        self.assertTrue(parsed.is_valid)
 
 
 if __name__ == "__main__":

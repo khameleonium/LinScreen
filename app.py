@@ -30,10 +30,10 @@ from capture.portal import (
     is_screencast_available,
     is_screenshot_available,
 )
+from capture.windows import list_objects
 from capture.screen import (
     CaptureBackendError,
     CaptureMode,
-    active_window_rect,
     build_pipewire_video_input,
     build_video_input,
     crop_desktop_image,
@@ -65,6 +65,7 @@ from encoder.profiles import (
 )
 from ui.overlay import RegionOverlay
 from ui.recorder_bar import RecorderBar
+from ui.region_frame import PAUSED_COLOR, RECORDING_COLOR, RegionFrame
 from ui.settings import SettingsDialog
 from ui.log_window import LogWindow
 from ui.tray import TrayIcon
@@ -111,6 +112,10 @@ class LinScreenApplication(QObject):
         self._overlay: RegionOverlay | None = None
         # Запрос к порталу асинхронный: ссылка удерживается до ответа.
         self._screenshot_portal: ScreenshotPortal | None = None
+        # Рамка, обводящая записываемую область во время съёмки.
+        self._region_frame = RegionFrame()
+        # Область текущей записи: нужна для показа рамки.
+        self._recorded_rect: QRect | None = None
         self._screencast_portal: ScreenCastPortal | None = None
         # Сведения о возможностях сборки FFmpeg, полученные фоновым опросом.
         self._capabilities: object | None = None
@@ -310,9 +315,17 @@ class LinScreenApplication(QObject):
             return
 
         if mode is CaptureMode.WINDOW:
-            # При недоступности сведений об окне снимается весь экран.
-            rect = active_window_rect() or virtual_geometry()
-            self._finish_screenshot(crop_desktop_image(desktop, rect))
+            # Объект выбирается наведением: под курсором подсвечивается
+            # окно либо его часть, щелчок снимает подсвеченное. Ручное
+            # протягивание при этом остаётся доступным.
+            self._select_region(
+                desktop,
+                tr(
+                    "Наведите указатель на окно и щёлкните. "
+                    "Протягивание задаёт область вручную, Esc — отмена"
+                ),
+                lambda rect: self._finish_screenshot(crop_desktop_image(desktop, rect)),
+            )
             return
 
         # Режим полного экрана возвращает снимок без обрезки.
@@ -321,11 +334,32 @@ class LinScreenApplication(QObject):
     def _select_region(self, desktop: QImage, hint: str, handler: Callable[[QRect], None]) -> None:
         """Показ оверлея выделения области поверх замороженного снимка."""
         overlay = RegionOverlay(desktop, virtual_geometry(), hint)
+        # Перечень объектов интерфейса собирается обходом дерева окон и
+        # занимает десятки миллисекунд. Сбор вынесен в отдельный поток:
+        # оверлей показывается сразу, а подсветка объектов появляется
+        # мгновением позже, к началу движения мыши.
+        run_async(
+            self,
+            list_objects,
+            lambda objects: self._fill_overlay_objects(overlay, objects),
+            None,
+            virtual_geometry(),
+        )
         overlay.selected.connect(handler)
         overlay.cancelled.connect(lambda: setattr(self, "_overlay", None))
         overlay.selected.connect(lambda _rect: setattr(self, "_overlay", None))
         self._overlay = overlay
         overlay.show_overlay()
+
+    @staticmethod
+    def _fill_overlay_objects(overlay: RegionOverlay, objects: object) -> None:
+        """Передача собранных объектов интерфейса открытому оверлею."""
+        try:
+            if isinstance(objects, list):
+                overlay.set_objects(objects)
+        except RuntimeError:
+            # Оверлей успели закрыть до окончания сбора.
+            pass
 
     def _finish_screenshot(self, image: QImage) -> None:
         """Обработка готового снимка согласно настройкам."""
@@ -520,6 +554,8 @@ class LinScreenApplication(QObject):
     def _launch_recording(self, rect: object, devices: object) -> None:
         """Сборка задания записи и его запуск."""
         settings = self._config.settings.video
+        # Прямоугольник запоминается для показа рамки во время записи.
+        self._recorded_rect = QRect(rect) if isinstance(rect, QRect) else None
         audio_devices: list[AudioDevice] = devices if isinstance(devices, list) else []
 
         try:
@@ -778,6 +814,7 @@ class LinScreenApplication(QObject):
             return
         self._tray.set_state(state)
         self._recorder_bar.update_state(state)
+        self._update_region_frame(state)
         if state in (RecorderState.FINISHED, RecorderState.FAILED, RecorderState.IDLE):
             self._recorder_bar.hide()
             # Панель записи закрывается всегда, прочие окна возвращаются
@@ -786,6 +823,29 @@ class LinScreenApplication(QObject):
                 window for window in self._hidden_windows if window is not self._recorder_bar
             ]
             self._restore_windows()
+
+    def _update_region_frame(self, state: RecorderState) -> None:
+        """
+        Показ рамки вокруг записываемой области.
+
+        Рамка рисуется снаружи области и в запись не попадает. Для
+        съёмки целого экрана она не показывается: там ей просто нет
+        места, а границы кадра и так очевидны.
+        """
+        area = self._recorded_rect
+        if state is RecorderState.RECORDING and area is not None:
+            if area.contains(virtual_geometry()):
+                return
+            self._region_frame.show_for(area, RECORDING_COLOR)
+        elif state is RecorderState.PAUSED and self._region_frame.isVisible():
+            self._region_frame.set_color(PAUSED_COLOR)
+        elif state in (
+            RecorderState.FINISHED,
+            RecorderState.FAILED,
+            RecorderState.IDLE,
+            RecorderState.PROCESSING,
+        ):
+            self._region_frame.hide()
 
     def _on_elapsed(self, milliseconds: int) -> None:
         """Обновление счётчиков длительности."""
@@ -911,12 +971,23 @@ class LinScreenApplication(QObject):
             self._config, self._profiles, self._session, self._diagnostics_text()
         )
         dialog.settingsSaved.connect(self._on_settings_saved)
+        dialog.hotkeyCaptureChanged.connect(self._on_hotkey_capture)
         dialog.finished.connect(lambda _result: self._close_settings())
         self._settings_dialog = dialog
         dialog.show()
 
+    def _on_hotkey_capture(self, active: bool) -> None:
+        """Приостановка перехвата на время набора нового сочетания."""
+        if active:
+            self._hotkeys.suspend()
+        else:
+            self._hotkeys.resume()
+
     def _close_settings(self) -> None:
         """Освобождение ссылки на закрытое окно настроек."""
+        # Перехват возобновляется безусловно: окно могло быть закрыто во
+        # время набора сочетания, и приостановка осталась бы навсегда.
+        self._hotkeys.resume()
         self._settings_dialog = None
 
     def _on_settings_saved(self) -> None:
@@ -955,6 +1026,7 @@ class LinScreenApplication(QObject):
 
     def quit(self) -> None:
         """Завершение работы приложения."""
+        self._region_frame.hide()
         if self._recorder.state.is_busy and not self._quit_after_recording:
             # Незавершённая запись сначала корректно останавливается,
             # иначе файл останется без финализированного заголовка.

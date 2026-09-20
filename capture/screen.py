@@ -47,7 +47,7 @@ class CaptureMode(str, Enum):
         return {
             CaptureMode.REGION: tr("Выделенная область"),
             CaptureMode.FULLSCREEN: tr("Весь экран"),
-            CaptureMode.WINDOW: tr("Активное окно"),
+            CaptureMode.WINDOW: tr("Объект под курсором"),
             CaptureMode.MONITOR: tr("Отдельный монитор"),
         }[self]
 

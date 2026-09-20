@@ -28,11 +28,23 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import QWidget
 
+from capture.windows import InterfaceObject, object_at
+
 # Прозрачность затемнения незанятой части экрана.
 DIM_ALPHA = 130
 # Минимальный размер области: случайный щелчок не должен давать снимок
 # размером в один пиксель.
 MINIMUM_SIZE = 8
+# Смещение указателя, до которого нажатие считается щелчком, а не
+# протягиванием. Без допуска дрожание руки отменяло бы автоматический
+# выбор объекта под курсором.
+CLICK_TOLERANCE = 4
+
+# Цвет рамки выделения. Зелёный выбран как признак подготовки: во время
+# самой записи рамка становится красной, см. ui/region_frame.py.
+SELECTION_COLOR = QColor(80, 200, 110)
+# Цвет затемнения незанятой части экрана.
+DIM_COLOR = QColor(0, 0, 0, DIM_ALPHA)
 
 
 class RegionOverlay(QWidget):
@@ -48,12 +60,19 @@ class RegionOverlay(QWidget):
         desktop: QImage,
         virtual_rect: QRect,
         hint: str = tr("Выделите область: ЛКМ — выбор, Esc — отмена, Enter — весь экран"),
+        objects: list[InterfaceObject] | None = None,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
         self._desktop = desktop
         self._virtual_rect = virtual_rect
         self._hint = hint
+        # Снимок объектов интерфейса, собранный до показа оверлея: сам
+        # оверлей занимает весь экран и иначе оказался бы единственным
+        # совпадением под курсором.
+        self._objects = objects or []
+        # Границы объекта под курсором.
+        self._hovered: QRect | None = None
         self._origin = QPoint()
         self._current = QPoint()
         self._selecting = False
@@ -75,6 +94,15 @@ class RegionOverlay(QWidget):
         self.setCursor(Qt.CursorShape.CrossCursor)
         self.setMouseTracking(True)
         self.setGeometry(virtual_rect)
+
+    def set_objects(self, objects: list[InterfaceObject]) -> None:
+        """
+        Передача перечня объектов интерфейса после его сбора.
+
+        Сбор выполняется в отдельном потоке, поэтому оверлей может быть
+        показан раньше, чем перечень готов.
+        """
+        self._objects = objects
 
     def _prepare_background(self) -> None:
         """Подготовка изображения экрана к быстрой отрисовке."""
@@ -120,7 +148,7 @@ class RegionOverlay(QWidget):
             # Затемняются только полосы вокруг выбранной области: заливка
             # всего экрана с последующим восстановлением яркости требует
             # двух проходов по всем точкам вместо одного.
-            dim = QColor(0, 0, 0, DIM_ALPHA)
+            dim = DIM_COLOR
             painter.fillRect(QRect(0, 0, target.width(), selection.top()), dim)
             painter.fillRect(
                 QRect(
@@ -142,14 +170,42 @@ class RegionOverlay(QWidget):
                 dim,
             )
 
-            pen = QPen(QColor(64, 160, 255), 1)
-            painter.setPen(pen)
+            painter.setPen(QPen(SELECTION_COLOR, 1))
             painter.drawRect(selection.adjusted(0, 0, -1, -1))
             self._draw_size_label(painter, selection)
+        elif self._hovered is not None:
+            # Объект под курсором: яркость его области восстанавливается,
+            # границы обводятся пунктиром.
+            self._dim_around(painter, target, self._hovered)
+            pen = QPen(SELECTION_COLOR, 2)
+            pen.setStyle(Qt.PenStyle.DashLine)
+            painter.setPen(pen)
+            painter.drawRect(self._hovered.adjusted(1, 1, -2, -2))
+            self._draw_size_label(painter, self._hovered)
         else:
-            painter.fillRect(target, QColor(0, 0, 0, DIM_ALPHA))
+            painter.fillRect(target, DIM_COLOR)
             self._draw_hint(painter)
         painter.end()
+
+    @staticmethod
+    def _dim_around(painter: QPainter, target: QRect, area: QRect) -> None:
+        """
+        Затемнение экрана вокруг указанной области.
+
+        Заливаются четыре полосы по краям: заливка всего экрана с
+        последующим восстановлением яркости потребовала бы двух проходов
+        по всем точкам вместо одного.
+        """
+        painter.fillRect(QRect(0, 0, target.width(), area.top()), DIM_COLOR)
+        painter.fillRect(
+            QRect(0, area.bottom() + 1, target.width(), target.height() - area.bottom() - 1),
+            DIM_COLOR,
+        )
+        painter.fillRect(QRect(0, area.top(), area.left(), area.height()), DIM_COLOR)
+        painter.fillRect(
+            QRect(area.right() + 1, area.top(), target.width() - area.right() - 1, area.height()),
+            DIM_COLOR,
+        )
 
     def _draw_size_label(self, painter: QPainter, selection: QRect) -> None:
         """Подпись с размерами области рядом с рамкой выделения."""
@@ -212,8 +268,9 @@ class RegionOverlay(QWidget):
             self.update()
 
     def mouseMoveEvent(self, event: QMouseEvent) -> None:  # noqa: N802
-        """Изменение размеров выделяемой области."""
+        """Изменение размеров области либо поиск объекта под курсором."""
         if not self._selecting:
+            self._update_hovered(event.position().toPoint())
             return
         previous = self._selection_rect()
         self._current = event.position().toPoint()
@@ -222,6 +279,30 @@ class RegionOverlay(QWidget):
         region = previous.united(self._selection_rect())
         self.update(region.adjusted(-80, -40, 80, 40))
 
+    def _update_hovered(self, position: QPoint) -> None:
+        """Обновление границ объекта под курсором."""
+        if not self._objects:
+            return
+        # Координаты окна приводятся к координатам рабочего стола: снимок
+        # объектов собран именно в них.
+        found = object_at(self._objects, position + self._virtual_rect.topLeft())
+        hovered = found.translated(-self._virtual_rect.topLeft()) if found else None
+        if hovered == self._hovered:
+            return
+
+        previous = self._hovered
+        self._hovered = hovered
+        # Перерисовывается объединение прежней и новой областей с запасом
+        # под рамку и подпись размера.
+        region = QRect()
+        for part in (previous, hovered):
+            if part is not None:
+                region = QRect(part) if region.isNull() else region.united(part)
+        if region.isNull():
+            self.update()
+        else:
+            self.update(region.adjusted(-80, -40, 80, 40))
+
     def mouseReleaseEvent(self, event: QMouseEvent) -> None:  # noqa: N802
         """Завершение выделения."""
         if event.button() != Qt.MouseButton.LeftButton or not self._selecting:
@@ -229,10 +310,18 @@ class RegionOverlay(QWidget):
         self._selecting = False
         selection = self._selection_rect()
         if selection.width() < MINIMUM_SIZE or selection.height() < MINIMUM_SIZE:
-            # Слишком малая область считается случайным щелчком:
-            # выделение сбрасывается, оверлей остаётся открытым.
+            # Нажатие без протягивания: снимается объект под курсором,
+            # если он определён. Собственноручное выделение имеет
+            # преимущество, поэтому проверка выполняется только здесь.
+            moved = (event.position().toPoint() - self._origin).manhattanLength()
+            if moved <= CLICK_TOLERANCE and self._hovered is not None:
+                self._finish(QRect(self._hovered))
+                return
+            # Щелчок мимо объекта: выделение сбрасывается, оверлей
+            # остаётся открытым.
             self._origin = QPoint()
             self._current = QPoint()
+            self._hovered = None
             self.update()
             return
         self._finish(selection)

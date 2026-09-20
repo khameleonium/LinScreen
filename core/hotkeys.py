@@ -15,6 +15,9 @@ from __future__ import annotations
 
 from core.i18n import tr
 
+import time
+from dataclasses import dataclass
+
 from PySide6.QtCore import QObject, Signal
 
 from core.session import DesktopSession
@@ -29,6 +32,12 @@ _MODIFIERS: dict[str, str] = {
     "meta": "<cmd>",
     "win": "<cmd>",
 }
+
+# Наименьший промежуток между двумя срабатываниями одного действия.
+# Система доставляет повторные события нажатия при удержании клавиши, а
+# перехваченная другой программой клавиша может прийти дважды. Без этого
+# промежутка одно нажатие выполняло бы действие несколько раз.
+REPEAT_GUARD_SEC = 0.4
 
 # Соответствие названий клавиш обозначениям протокола X11. Требуется для
 # поиска символов, которые та же физическая клавиша выдаёт с Shift: часть
@@ -189,6 +198,61 @@ def to_pynput_sequences(combination: str) -> list[str]:
     return sequences
 
 
+@dataclass(frozen=True)
+class Combination:
+    """
+    Разобранное сочетание клавиш.
+
+    Хранится набор модификаторов и допустимые обозначения основной
+    клавиши. Обозначений может быть несколько: одна физическая клавиша
+    выдаёт разные символы на разных уровнях раскладки.
+    """
+
+    modifiers: frozenset[str]
+    keys: frozenset[str]
+
+    @property
+    def is_valid(self) -> bool:
+        """Признак пригодного к перехвату сочетания."""
+        return bool(self.keys)
+
+
+def parse_combination(combination: str) -> Combination:
+    """
+    Разбор записи вида "Ctrl+Alt+R" на модификаторы и основную клавишу.
+
+    Для сочетаний с Shift добавляются обозначения символов верхнего
+    уровня той же физической клавиши: раскладка выдаёт с Shift другой
+    символ, и сравнение по одному обозначению не проходит.
+    """
+    modifiers: set[str] = set()
+    keys: set[str] = set()
+
+    parts = [chunk.strip().lower() for chunk in combination.split("+") if chunk.strip()]
+    for index, part in enumerate(parts):
+        if part in _MODIFIERS and index < len(parts) - 1:
+            modifiers.add(_MODIFIERS[part].strip("<>"))
+            continue
+        if part in _SPECIAL_KEYS:
+            keys.add(_SPECIAL_KEYS[part].strip("<>"))
+        elif len(part) > 1 and part.startswith("f") and part[1:].isdigit():
+            keys.add(part)
+        elif part in _MODIFIERS:
+            # Сочетание состоит из одного модификатора.
+            keys.add(_MODIFIERS[part].strip("<>"))
+        else:
+            keys.add(part[:1])
+
+    if "shift" in modifiers and parts:
+        # Основной клавишей считается последняя в записи сочетания.
+        for keysym in shifted_keysyms(parts[-1]):
+            # Числовое обозначение принимается наравне с именами и
+            # покрывает символы, отсутствующие в таблице перехватчика.
+            keys.add(str(keysym))
+
+    return Combination(frozenset(modifiers), frozenset(keys))
+
+
 class HotkeyManager(QObject):
     """Менеджер глобальных сочетаний клавиш с автовыбором способа перехвата."""
 
@@ -202,6 +266,16 @@ class HotkeyManager(QObject):
         self._session = session
         self._listener = None
         self._mapping: dict[str, str] = {}
+        self._combinations: list[tuple[str, Combination]] = []
+        # Набор удерживаемых модификаторов на момент нажатия клавиши.
+        self._pressed_modifiers: set[str] = set()
+        # Обозначения удерживаемых обычных клавиш: повторные события при
+        # удержании и дубликаты от других перехватчиков не учитываются.
+        self._pressed_keys: set[str] = set()
+        # Время последнего срабатывания каждого действия.
+        self._last_fired: dict[str, float] = {}
+        # Признак приостановки: применяется при вводе нового сочетания.
+        self._suspended = False
 
     @property
     def is_active(self) -> bool:
@@ -241,6 +315,23 @@ class HotkeyManager(QObject):
                 pass
             self._listener = None
 
+    def suspend(self) -> None:
+        """
+        Временная приостановка перехвата.
+
+        Применяется при вводе нового сочетания в настройках: иначе
+        нажатие клавиш в поле ввода выполнило бы назначенное действие.
+        """
+        self._suspended = True
+        self._pressed_modifiers.clear()
+        self._pressed_keys.clear()
+
+    def resume(self) -> None:
+        """Возобновление перехвата после приостановки."""
+        self._suspended = False
+        self._pressed_modifiers.clear()
+        self._pressed_keys.clear()
+
     def _start_pynput(self) -> None:
         """Запуск перехватчика клавиш для сессии X11."""
         try:
@@ -251,31 +342,112 @@ class HotkeyManager(QObject):
             )
             return
 
-        handlers: dict[str, object] = {}
+        self._combinations = []
         for action, combination in self._mapping.items():
-            handler = self._make_handler(action)
-            for sequence in to_pynput_sequences(combination):
-                # Замыкание фиксирует имя действия: сигнал испускается из
-                # потока перехватчика и доставляется очередью событий Qt.
-                # Все обозначения одного сочетания ведут к одному действию.
-                handlers[sequence] = handler
-
-        if not handlers:
+            parsed = parse_combination(combination)
+            if parsed.is_valid:
+                self._combinations.append((action, parsed))
+        if not self._combinations:
             return
+
+        self._pressed_modifiers = set()
+        self._pressed_keys = set()
+        self._last_fired = {}
         try:
-            listener = keyboard.GlobalHotKeys(handlers)
+            listener = keyboard.Listener(
+                on_press=self._on_press, on_release=self._on_release
+            )
             listener.daemon = True
             listener.start()
         except Exception as error:  # noqa: BLE001 - причина уходит в интерфейс
-            self.unavailable.emit(tr("Не удалось зарегистрировать клавиши: {0}").format(error))
+            self.unavailable.emit(
+                tr("Не удалось зарегистрировать клавиши: {0}").format(error)
+            )
             return
         self._listener = listener
 
-    def _make_handler(self, action: str):  # type: ignore[no-untyped-def]
-        """Создание обработчика одного сочетания клавиш."""
+    @staticmethod
+    def _modifier_name(key: object) -> str | None:
+        """Обобщённое имя модификатора либо пустое значение."""
+        name = getattr(key, "name", None)
+        if not name:
+            return None
+        for prefix in ("ctrl", "alt", "shift", "cmd"):
+            if name.startswith(prefix):
+                # Левая и правая клавиши считаются одним модификатором,
+                # как и правый Alt, применяемый в части раскладок.
+                return prefix
+        return None
 
-        def handler() -> None:
-            """Обработчик, вызываемый потоком перехвата."""
+    def _key_names(self, key: object) -> set[str]:
+        """
+        Обозначения нажатой клавиши, пригодные для сравнения.
+
+        Возвращается несколько вариантов: имя специальной клавиши, символ
+        и числовой код. Это покрывает и раскладки, и уровни клавиш.
+        """
+        names: set[str] = set()
+        name = getattr(key, "name", None)
+        if name:
+            names.add(name)
+
+        candidates = [key]
+        listener = self._listener
+        if listener is not None:
+            try:
+                # Приведение к основной раскладке: буквенные сочетания
+                # должны работать при любом выбранном языке ввода.
+                candidates.append(listener.canonical(key))
+            except Exception:  # noqa: BLE001 - приведение не обязано удаваться
+                pass
+
+        for candidate in candidates:
+            char = getattr(candidate, "char", None)
+            if char:
+                names.add(char.lower())
+            code = getattr(candidate, "vk", None)
+            if code:
+                names.add(str(code))
+            candidate_name = getattr(candidate, "name", None)
+            if candidate_name:
+                names.add(candidate_name)
+        return names
+
+    def _on_press(self, key: object) -> None:
+        """Обработка нажатия в потоке перехватчика."""
+        modifier = self._modifier_name(key)
+        if modifier is not None:
+            self._pressed_modifiers.add(modifier)
+            return
+        if self._suspended:
+            return
+
+        names = self._key_names(key)
+        if names & self._pressed_keys:
+            # Клавиша уже удерживается: повторное событие пропускается.
+            return
+        self._pressed_keys |= names
+
+        pressed = frozenset(self._pressed_modifiers)
+        moment = time.monotonic()
+        for action, combination in self._combinations:
+            # Набор модификаторов сравнивается целиком: иначе сочетание
+            # без модификаторов срабатывало бы и при нажатых Ctrl или Alt,
+            # то есть одно нажатие выполняло бы несколько действий.
+            if combination.modifiers != pressed or not (names & combination.keys):
+                continue
+            if moment - self._last_fired.get(action, 0.0) < REPEAT_GUARD_SEC:
+                # Повторное событие того же нажатия: часть программ
+                # перехватывает клавишу и вызывает её доставку дважды.
+                return
+            self._last_fired[action] = moment
             self.activated.emit(action)
+            return
 
-        return handler
+    def _on_release(self, key: object) -> None:
+        """Обработка отпускания в потоке перехватчика."""
+        modifier = self._modifier_name(key)
+        if modifier is not None:
+            self._pressed_modifiers.discard(modifier)
+            return
+        self._pressed_keys -= self._key_names(key)

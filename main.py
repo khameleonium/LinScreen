@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from core.i18n import tr
 
+import fcntl
 import os
 import signal
 import socket
@@ -38,6 +39,43 @@ _reported_errors = 0
 # Объекты обработки сигналов операционной системы. Ссылки удерживаются на
 # время работы приложения: уведомитель и сокеты не должны быть удалены.
 _signal_objects: list[object] = []
+
+
+def lock_file_path() -> Path:
+    """Путь файла блокировки, удерживаемого работающим приложением."""
+    base = os.environ.get("XDG_RUNTIME_DIR") or os.environ.get("XDG_CACHE_HOME")
+    if not base:
+        base = str(Path.home() / ".cache")
+    return Path(base) / "linscreen.lock"
+
+
+def acquire_single_instance() -> object | None:
+    """
+    Захват признака единственного запущенного приложения.
+
+    Второй запущенный экземпляр перехватывал бы те же горячие клавиши и
+    показывал бы собственный оверлей поверх первого, из-за чего каждое
+    действие выполнялось бы дважды. Возвращается удерживаемый файл либо
+    пустое значение, если приложение уже работает.
+
+    Блокировка снимается ядром при завершении процесса, поэтому
+    аварийное завершение не оставляет её висящей.
+    """
+    path = lock_file_path()
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        handle = path.open("w")
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        return None
+
+    try:
+        handle.write(f"{os.getpid()}\n")
+        handle.flush()
+    except OSError:
+        # Запись номера процесса носит справочный характер.
+        pass
+    return handle
 
 
 def crash_log_path() -> Path:
@@ -282,6 +320,20 @@ def main() -> int:
             tr("Системный трей недоступен в текущем окружении рабочего стола."),
         )
         return 1
+
+    # Ссылка на файл блокировки удерживается до конца работы: закрытие
+    # файла сняло бы признак единственного экземпляра.
+    instance_lock = acquire_single_instance()
+    if instance_lock is None:
+        # Окно с сообщением здесь неуместно: запуск мог быть выполнен из
+        # меню рабочего стола, и нажимать кнопку будет некому. Работающий
+        # экземпляр уже виден значком в системном трее.
+        print(
+            tr("Приложение уже запущено: его значок находится в системном трее."),
+            file=sys.stderr,
+        )
+        return 0
+    _signal_objects.append(instance_lock)
 
     controller = LinScreenApplication()
     controller.start()

@@ -130,7 +130,7 @@ class TrayIcon(QObject):
             lambda: self.screenshotRequested.emit(CaptureMode.FULLSCREEN),
         )
         self._add_action(
-            tr("Активное окно"), lambda: self.screenshotRequested.emit(CaptureMode.WINDOW)
+            tr("Объект под курсором"), lambda: self.screenshotRequested.emit(CaptureMode.WINDOW)
         )
 
         # Подменю мониторов пересобирается перед каждым показом: состав

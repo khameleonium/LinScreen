@@ -88,6 +88,9 @@ class SettingsDialog(QDialog):
 
     # Настройки сохранены: приложению требуется перечитать значения.
     settingsSaved = Signal()
+    # Набор сочетания клавиш начат или завершён: на это время глобальный
+    # перехват приостанавливается.
+    hotkeyCaptureChanged = Signal(bool)
 
     def __init__(
         self,
@@ -832,6 +835,7 @@ class SettingsDialog(QDialog):
         self._hotkey_fields: dict[str, HotkeyEdit] = {}
         for name, title in titles.items():
             field = HotkeyEdit(getattr(settings, name))
+            field.captureChanged.connect(self.hotkeyCaptureChanged)
             self._hotkey_fields[name] = field
             form.addRow(title, field)
 

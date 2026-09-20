@@ -10,8 +10,8 @@ from __future__ import annotations
 
 from core.i18n import tr
 
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QKeyEvent
+from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QFocusEvent, QKeyEvent
 from PySide6.QtWidgets import QLineEdit, QWidget
 
 # Клавиши-модификаторы, самостоятельного значения не имеющие.
@@ -27,11 +27,26 @@ _MODIFIER_KEYS = {
 class HotkeyEdit(QLineEdit):
     """Поле, заполняемое нажатием нужного сочетания клавиш."""
 
+    # Начало и конец набора сочетания. Пока поле в фокусе, глобальный
+    # перехват приостанавливается: иначе нажатие в поле выполнило бы
+    # назначенное этому сочетанию действие.
+    captureChanged = Signal(bool)
+
     def __init__(self, value: str = "", parent: QWidget | None = None) -> None:
         super().__init__(value, parent)
         self.setReadOnly(True)
         self.setPlaceholderText(tr("Нажмите сочетание клавиш"))
         self.setClearButtonEnabled(True)
+
+    def focusInEvent(self, event: QFocusEvent) -> None:  # noqa: N802 - имя из Qt
+        """Начало набора сочетания."""
+        super().focusInEvent(event)
+        self.captureChanged.emit(True)
+
+    def focusOutEvent(self, event: QFocusEvent) -> None:  # noqa: N802 - имя из Qt
+        """Завершение набора сочетания."""
+        super().focusOutEvent(event)
+        self.captureChanged.emit(False)
 
     def keyPressEvent(self, event: QKeyEvent) -> None:  # noqa: N802 - имя из Qt
         """Запись нажатого сочетания в текстовое представление."""
