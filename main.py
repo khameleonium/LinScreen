@@ -11,6 +11,8 @@
 
 from __future__ import annotations
 
+from core.i18n import tr
+
 import os
 import signal
 import socket
@@ -88,9 +90,10 @@ def record_crash(
             QMessageBox.critical(
                 None,
                 "LinScreen",
-                f"Произошла ошибка:\n{value}\n\n"
-                f"Работа продолжается. Подробности записаны в файл:\n{path}\n\n"
-                "Дальнейшие ошибки будут записываться без показа этого окна.",
+                tr(
+                    "Произошла ошибка:\n{0}\n\nРабота продолжается. Подробности записаны в "
+                    "файл:\n{1}\n\nДальнейшие ошибки будут записываться без показа этого окна."
+                ).format(value, path),
             )
         except Exception:  # noqa: BLE001 - обработчик ошибок не вправе падать
             pass
@@ -143,46 +146,70 @@ def self_test() -> int:
     сессии, после чего завершает работу.
     """
     from capture.audio import list_audio_devices
+    from core.config import ConfigManager
+    from core.i18n import set_language
     from core.runtime import bundle_dir, is_frozen
     from core.session import detect_session
     from encoder.ffmpeg import FFmpegNotFoundError, find_ffmpeg, probe_capabilities
 
+    # Язык берётся из настроек: вывод проверки читает тот же человек,
+    # который пользуется приложением.
+    configuration = ConfigManager()
+    configuration.load()
+    set_language(configuration.settings.general.language)
+
     print(f"LinScreen {APPLICATION_VERSION}")
-    print(f"Режим запуска: {'собранный файл' if is_frozen() else 'исходные тексты'}")
+    print(
+        tr("Режим запуска: {0}").format(
+            tr("собранный файл") if is_frozen() else tr("исходные тексты")
+        )
+    )
     if bundle_dir() is not None:
-        print(f"Каталог вложений: {bundle_dir()}")
+        print(tr("Каталог вложений: {0}").format(bundle_dir()))
 
     session = detect_session()
-    print(f"Сессия: {session.session_type.label}, окружение: {session.desktop}")
+    print(tr("Сессия: {0}, окружение: {1}").format(session.session_type.label, session.desktop))
 
     try:
         binary = find_ffmpeg()
     except FFmpegNotFoundError as error:
-        print(f"FFmpeg: НЕ НАЙДЕН — {error}")
+        print(tr("FFmpeg: НЕ НАЙДЕН — {0}").format(error))
         return 1
 
     print(f"FFmpeg: {binary}")
     capabilities = probe_capabilities(binary)
-    print(f"Версия FFmpeg: {capabilities.version}")
+    print(tr("Версия FFmpeg: {0}").format(capabilities.version))
     codecs = [
         name
         for name in ("libx264", "libx265", "libsvtav1", "libvpx-vp9", "ffv1", "prores_ks")
         if capabilities.has_encoder(name)
     ]
-    print(f"Видеокодеки: {', '.join(codecs) or 'отсутствуют'}")
-    print(f"Захват экрана X11: {'да' if capabilities.can_capture_x11 else 'нет'}")
-    print(f"Захват звука PulseAudio: {'да' if capabilities.can_capture_pulse else 'НЕТ'}")
-    print(f"Палитра GIF: {'да' if capabilities.can_build_gif_palette else 'нет'}")
-    print(f"Захват PipeWire (Wayland): {'да' if capabilities.can_capture_pipewire else 'нет'}")
+    print(tr("Видеокодеки: {0}").format(", ".join(codecs) or tr("отсутствуют")))
+    print(
+        tr("Захват экрана X11: {0}").format(tr("да") if capabilities.can_capture_x11 else tr("нет"))
+    )
+    print(
+        tr("Захват звука PulseAudio: {0}").format(
+            tr("да") if capabilities.can_capture_pulse else tr("НЕТ")
+        )
+    )
+    print(
+        tr("Палитра GIF: {0}").format(tr("да") if capabilities.can_build_gif_palette else tr("нет"))
+    )
+    print(
+        tr("Захват PipeWire (Wayland): {0}").format(
+            tr("да") if capabilities.can_capture_pipewire else tr("нет")
+        )
+    )
 
     from encoder.images import is_avif_available
 
-    print(f"Сохранение в AVIF: {'да' if is_avif_available() else 'нет'}")
+    print(tr("Сохранение в AVIF: {0}").format(tr("да") if is_avif_available() else tr("нет")))
 
     devices = list_audio_devices()
-    print(f"Звуковых источников: {len(devices)}")
+    print(tr("Звуковых источников: {0}").format(len(devices)))
     for device in devices:
-        kind = "монитор" if device.is_monitor else "вход"
+        kind = tr("монитор") if device.is_monitor else tr("вход")
         print(f"  [{kind}] {device.description}")
 
     problems = capabilities.missing_essentials()
@@ -191,16 +218,16 @@ def self_test() -> int:
     # проявилось бы только при попытке воспользоваться соответствующей
     # возможностью, что заметно позже момента запуска.
     for module, purpose in (
-        ("pynput", "глобальные клавиши"),
-        ("Xlib", "определение активного окна"),
-        ("PIL", "сохранение изображений"),
-        ("PySide6.QtDBus", "порталы рабочего стола"),
+        ("pynput", tr("глобальные клавиши")),
+        ("Xlib", tr("определение активного окна")),
+        ("PIL", tr("сохранение изображений")),
+        ("PySide6.QtDBus", tr("порталы рабочего стола")),
     ):
         try:
             __import__(module)
-            print(f"Модуль {module}: есть ({purpose})")
+            print(tr("Модуль {0}: есть ({1})").format(module, purpose))
         except ImportError:
-            problems.append(f"Недоступен модуль {module}: не работают {purpose}.")
+            problems.append(tr("Недоступен модуль {0}: не работают {1}.").format(module, purpose))
 
     # Проверка оконной подсистемы: создание приложения и отрисовка значка.
     try:
@@ -211,16 +238,22 @@ def self_test() -> int:
         from encoder.process import RecorderState
 
         icon = render_tray_icon(RecorderState.IDLE)
-        print(f"Графическая подсистема: работает, значок {icon.availableSizes()[0].width()} px")
+        print(
+            tr("Графическая подсистема: работает, значок {0} px").format(
+                icon.availableSizes()[0].width()
+            )
+        )
         available = QSystemTrayIcon.isSystemTrayAvailable()
-        print(f"Системный трей: {'доступен' if available else 'НЕДОСТУПЕН'}")
+        print(tr("Системный трей: {0}").format(tr("доступен") if available else tr("НЕДОСТУПЕН")))
         del probe
     except Exception as error:  # noqa: BLE001 - причина выводится пользователю
-        problems.append(f"Оконная подсистема недоступна: {error}")
+        problems.append(tr("Оконная подсистема недоступна: {0}").format(error))
 
     for problem in problems:
-        print(f"ОГРАНИЧЕНИЕ: {problem}")
-    print("Проверка завершена: " + ("есть ограничения" if problems else "всё в порядке"))
+        print(tr("ОГРАНИЧЕНИЕ: {0}").format(problem))
+    print(
+        tr("Проверка завершена: ") + (tr("есть ограничения") if problems else tr("всё в порядке"))
+    )
     return 0
 
 
@@ -246,7 +279,7 @@ def main() -> int:
         QMessageBox.critical(
             None,
             "LinScreen",
-            "Системный трей недоступен в текущем окружении рабочего стола.",
+            tr("Системный трей недоступен в текущем окружении рабочего стола."),
         )
         return 1
 

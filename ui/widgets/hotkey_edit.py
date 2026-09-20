@@ -8,6 +8,8 @@
 
 from __future__ import annotations
 
+from core.i18n import tr
+
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QKeyEvent
 from PySide6.QtWidgets import QLineEdit, QWidget
@@ -28,7 +30,7 @@ class HotkeyEdit(QLineEdit):
     def __init__(self, value: str = "", parent: QWidget | None = None) -> None:
         super().__init__(value, parent)
         self.setReadOnly(True)
-        self.setPlaceholderText("Нажмите сочетание клавиш")
+        self.setPlaceholderText(tr("Нажмите сочетание клавиш"))
         self.setClearButtonEnabled(True)
 
     def keyPressEvent(self, event: QKeyEvent) -> None:  # noqa: N802 - имя из Qt

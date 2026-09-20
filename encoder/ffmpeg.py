@@ -17,6 +17,8 @@
 
 from __future__ import annotations
 
+from core.i18n import tr
+
 import os
 import re
 import json
@@ -105,8 +107,10 @@ def find_binary(name: str, explicit_path: str | None = None) -> str:
             return str(candidate)
 
     raise FFmpegNotFoundError(
-        f"Исполняемый файл {name} не найден. "
-        "Требуется установить пакет ffmpeg или указать путь в настройках."
+        tr(
+            "Исполняемый файл {0} не найден. Требуется установить пакет ffmpeg или указать путь в "
+            "настройках."
+        ).format(name)
     )
 
 
@@ -194,20 +198,24 @@ class FFmpegCapabilities:
         """
         problems: list[str] = []
         if not self.has_encoder("libx264"):
-            problems.append("Отсутствует энкодер libx264: недоступны профили H.264.")
+            problems.append(tr("Отсутствует энкодер libx264: недоступны профили H.264."))
         if not self.has_muxer("matroska"):
-            problems.append("Отсутствует мультиплексор matroska: недоступен формат MKV.")
+            problems.append(tr("Отсутствует мультиплексор matroska: недоступен формат MKV."))
         if not self.can_build_gif_palette:
-            problems.append("Отсутствуют фильтры palettegen/paletteuse: недоступен GIF.")
+            problems.append(tr("Отсутствуют фильтры palettegen/paletteuse: недоступен GIF."))
         if not self.can_capture_pulse:
             problems.append(
-                "Отсутствует источник pulse: запись звука недоступна, так как "
-                "имена устройств приложение получает у звукового сервера."
+                tr(
+                    "Отсутствует источник pulse: запись звука недоступна, так как "
+                    "имена устройств приложение получает у звукового сервера."
+                )
             )
         if not (self.can_capture_x11 or self.can_capture_pipewire):
             problems.append(
-                "Отсутствуют источники захвата x11grab и pipewiregrab: "
-                "запись возможна только через внешние утилиты."
+                tr(
+                    "Отсутствуют источники захвата x11grab и pipewiregrab: "
+                    "запись возможна только через внешние утилиты."
+                )
             )
         return problems
 
@@ -241,14 +249,16 @@ def _run_probe(args: Sequence[str], timeout: float = PROBE_TIMEOUT_SEC) -> str:
             check=False,
         )
     except FileNotFoundError as error:
-        raise FFmpegNotFoundError(f"Не удалось запустить {args[0]}") from error
+        raise FFmpegNotFoundError(tr("Не удалось запустить {0}").format(args[0])) from error
     except subprocess.TimeoutExpired as error:
-        raise FFmpegProbeError(f"Команда {args[0]} не ответила за {timeout} с") from error
+        raise FFmpegProbeError(
+            tr("Команда {0} не ответила за {1} с").format(args[0], timeout)
+        ) from error
 
     if completed.returncode != 0 and not completed.stdout:
         # Часть справочных команд пишет в stderr, поэтому ненулевой код
         # считается ошибкой только при полностью пустом stdout.
-        raise FFmpegProbeError(completed.stderr.strip()[:500] or "Неизвестная ошибка опроса")
+        raise FFmpegProbeError(completed.stderr.strip()[:500] or tr("Неизвестная ошибка опроса"))
     return completed.stdout
 
 

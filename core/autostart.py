@@ -12,6 +12,7 @@ import os
 import shlex
 from pathlib import Path
 
+from core.i18n import tr
 from core.runtime import executable_path, is_frozen, project_root
 
 APPLICATION_ID = "linscreen"
@@ -75,8 +76,8 @@ def desktop_entry(icon: str = "camera-photo", autostart: bool = True) -> str:
         "[Desktop Entry]\n"
         "Type=Application\n"
         "Name=LinScreen\n"
-        "GenericName=Снимки экрана и запись видео\n"
-        "Comment=Снимки экрана, запись видео и редактор аннотаций\n"
+        f"GenericName={tr('Снимки экрана и запись видео')}\n"
+        f"Comment={tr('Снимки экрана, запись видео и редактор аннотаций')}\n"
         f"Exec={command}\n"
         f"Icon={icon}\n"
         "Terminal=false\n"

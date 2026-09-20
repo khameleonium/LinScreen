@@ -27,6 +27,8 @@ from dataclasses import dataclass, field, fields, is_dataclass
 from pathlib import Path
 from typing import Any
 
+from core.i18n import tr
+
 APPLICATION_NAME = "linscreen"
 
 # Шаблон недопустимых символов в имени файла. Разделитель каталогов
@@ -156,6 +158,8 @@ class GeneralSettings:
     hide_while_recording: bool = True
     # Задержка перед снимком, позволяющая раскрыть меню или подсказку.
     capture_delay_ms: int = 0
+    # Язык интерфейса: ru, en либо auto для определения по окружению.
+    language: str = "ru"
 
 
 @dataclass
@@ -232,8 +236,7 @@ FIELD_COMMENTS: dict[str, dict[str, str]] = {
         "screenshot_region": "Снимок выделенной области",
         "screenshot_fullscreen": "Снимок всего экрана",
         "screenshot_window": "Снимок активного окна",
-        "record_toggle": "Начать запись области и остановить её тем же "
-        "сочетанием",
+        "record_toggle": "Начать запись области и остановить её тем же " "сочетанием",
         "record_toggle_pause": "Пауза и продолжение записи",
     },
     "general": {
@@ -245,6 +248,7 @@ FIELD_COMMENTS: dict[str, dict[str, str]] = {
         "hide_while_recording": "Скрывать окна программы и панель записи "
         "во время записи: да или нет",
         "capture_delay_ms": "Задержка перед снимком в миллисекундах",
+        "language": "Язык интерфейса: ru, en либо auto для определения по окружению",
     },
 }
 
@@ -309,13 +313,15 @@ def dump_ini(settings: "Settings") -> str:
             continue
         title = SECTION_TITLES.get(section.name, "")
         if title:
-            lines.append(f"# {title}")
+            # Примечания переводятся при записи: сами строки объявлены на
+            # уровне модуля и переводу при загрузке не подлежат.
+            lines.append(f"# {tr(title)}")
         lines.append(f"[{section.name}]")
         comments = FIELD_COMMENTS.get(section.name, {})
         for item in fields(group):
             comment = comments.get(item.name)
             if comment:
-                lines.append(f"# {comment}")
+                lines.append(f"# {tr(comment)}")
             lines.append(f"{item.name} = {_format_value(getattr(group, item.name))}")
         lines.append("")
     return "\n".join(lines)
@@ -341,9 +347,7 @@ def parse_ini(text: str, settings: "Settings") -> None:
             # под прежними, чтобы переименование параметра не сбрасывало
             # настройку пользователя.
             names = (item.name, *aliases.get(item.name, ()))
-            found = next(
-                (name for name in names if parser.has_option(section.name, name)), None
-            )
+            found = next((name for name in names if parser.has_option(section.name, name)), None)
             if found is None:
                 continue
             raw = parser.get(section.name, found)
@@ -369,9 +373,9 @@ def _read_xdg_user_dir(key: str) -> Path | None:
     Файл содержит строки вида XDG_PICTURES_DIR="$HOME/Изображения" и
     учитывает локализованные названия каталогов, заданные при установке.
     """
-    source = Path(
-        os.environ.get("XDG_CONFIG_HOME") or str(Path.home() / ".config")
-    ) / "user-dirs.dirs"
+    source = (
+        Path(os.environ.get("XDG_CONFIG_HOME") or str(Path.home() / ".config")) / "user-dirs.dirs"
+    )
     if not source.is_file():
         return None
     try:
@@ -556,15 +560,11 @@ class ConfigManager:
 
     def build_image_path(self, extension: str) -> Path:
         """Путь нового файла снимка с учётом шаблона имени."""
-        return self._build_path(
-            self.images_dir(), self._settings.paths.image_template, extension
-        )
+        return self._build_path(self.images_dir(), self._settings.paths.image_template, extension)
 
     def build_video_path(self, extension: str) -> Path:
         """Путь нового файла записи с учётом шаблона имени."""
-        return self._build_path(
-            self.videos_dir(), self._settings.paths.video_template, extension
-        )
+        return self._build_path(self.videos_dir(), self._settings.paths.video_template, extension)
 
     def _build_path(self, directory: Path, template: str, extension: str) -> Path:
         """

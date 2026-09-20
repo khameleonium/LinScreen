@@ -24,6 +24,8 @@
 
 from __future__ import annotations
 
+from core.i18n import tr
+
 import os
 import shutil
 from collections import deque
@@ -96,14 +98,14 @@ class RecorderState(str, Enum):
     def label(self) -> str:
         """Человекочитаемое описание состояния для подсказки трея."""
         return {
-            RecorderState.IDLE: "Ожидание",
-            RecorderState.STARTING: "Запуск захвата",
-            RecorderState.RECORDING: "Идёт запись",
-            RecorderState.PAUSED: "Пауза",
-            RecorderState.STOPPING: "Завершение записи",
-            RecorderState.PROCESSING: "Обработка",
-            RecorderState.FINISHED: "Готово",
-            RecorderState.FAILED: "Ошибка",
+            RecorderState.IDLE: tr("Ожидание"),
+            RecorderState.STARTING: tr("Запуск захвата"),
+            RecorderState.RECORDING: tr("Идёт запись"),
+            RecorderState.PAUSED: tr("Пауза"),
+            RecorderState.STOPPING: tr("Завершение записи"),
+            RecorderState.PROCESSING: tr("Обработка"),
+            RecorderState.FINISHED: tr("Готово"),
+            RecorderState.FAILED: tr("Ошибка"),
         }[self]
 
     @property
@@ -327,7 +329,7 @@ class FFmpegTaskRunner(QObject):
     def start(self, steps: Sequence[FFmpegStep]) -> None:
         """Запуск задания. Повторный запуск во время работы запрещён."""
         if self.is_running:
-            raise RuntimeError("Задание уже выполняется")
+            raise RuntimeError(tr("Задание уже выполняется"))
         if not steps:
             # Пустой список считается успешно выполненным заданием:
             # вызывающая сторона получит сигнал завершения без запусков.
@@ -394,7 +396,7 @@ class FFmpegTaskRunner(QObject):
         """Обработка сбоя самого запуска процесса."""
         if error == QProcess.ProcessError.FailedToStart:
             # Отдельная ветка: сигнал finished в этом случае не приходит.
-            self._fail("Не удалось запустить FFmpeg: проверьте путь к бинарнику.")
+            self._fail(tr("Не удалось запустить FFmpeg: проверьте путь к бинарнику."))
 
     def _on_finished(self, exit_code: int, status: QProcess.ExitStatus) -> None:
         """Обработка завершения шага и переход к следующему."""
@@ -403,14 +405,15 @@ class FFmpegTaskRunner(QObject):
         if self._cancelled:
             self._cleanup_temporary()
             self._steps.clear()
-            self.failed.emit("Задание отменено")
+            self.failed.emit(tr("Задание отменено"))
             return
 
         crashed = status == QProcess.ExitStatus.CrashExit
         if crashed or exit_code not in GRACEFUL_EXIT_CODES:
             self._fail(
-                f"Шаг «{self._steps[self._index].label}» завершился с кодом {exit_code}.\n"
-                f"{summarize_log(self._log_tail)}"
+                tr("Шаг «{0}» завершился с кодом {1}.\n{2}").format(
+                    self._steps[self._index].label, exit_code, summarize_log(self._log_tail)
+                )
             )
             return
 
@@ -447,7 +450,7 @@ class FFmpegTaskRunner(QObject):
             except OSError as error:
                 # Неудача удаления не является причиной срыва задания:
                 # достаточно записи в журнал.
-                self.log.emit(f"Не удалось удалить временный файл {path}: {error}")
+                self.log.emit(tr("Не удалось удалить временный файл {0}: {1}").format(path, error))
         self._temporary.clear()
 
 
@@ -570,7 +573,7 @@ class ScreenRecorder(QObject):
     def start(self, job: RecordingJob) -> None:
         """Начало новой записи."""
         if self._state.is_busy:
-            raise RuntimeError("Запись уже выполняется")
+            raise RuntimeError(tr("Запись уже выполняется"))
 
         self._job = job
         self._segments = []
@@ -589,7 +592,7 @@ class ScreenRecorder(QObject):
             self._work_dir = self._prepare_work_dir(job)
         except OSError as error:
             self._set_state(RecorderState.FAILED)
-            self.failed.emit(f"Не удалось подготовить каталог записи: {error}")
+            self.failed.emit(tr("Не удалось подготовить каталог записи: {0}").format(error))
             return
 
         self._set_state(RecorderState.STARTING)
@@ -736,8 +739,10 @@ class ScreenRecorder(QObject):
             self._detach_process()
             self._set_state(RecorderState.FAILED)
             self.failed.emit(
-                "Не удалось запустить FFmpeg. Требуется проверить установку "
-                "пакета и путь к бинарнику в настройках."
+                tr(
+                    "Не удалось запустить FFmpeg. Требуется проверить установку "
+                    "пакета и путь к бинарнику в настройках."
+                )
             )
 
     def _on_segment_finished(self, exit_code: int, status: QProcess.ExitStatus) -> None:
@@ -760,7 +765,7 @@ class ScreenRecorder(QObject):
         if segment.exists() and segment.stat().st_size > 0:
             self._segments.append(segment)
         else:
-            self.warning.emit("Фрагмент записи оказался пустым и пропущен.")
+            self.warning.emit(tr("Фрагмент записи оказался пустым и пропущен."))
 
         expected = self._pause_requested or self._stop_requested
         crashed = status == QProcess.ExitStatus.CrashExit
@@ -769,7 +774,7 @@ class ScreenRecorder(QObject):
             # записанные фрагменты собираются в файл, а пользователь
             # получает предупреждение о неполноте записи.
             self.warning.emit(
-                "Захват прерван неожиданно, выполняется аварийное сохранение.\n"
+                tr("Захват прерван неожиданно, выполняется аварийное сохранение.\n")
                 + summarize_log(self._log_tail, limit=3)
             )
             self._finalize()
@@ -796,7 +801,7 @@ class ScreenRecorder(QObject):
             self._cleanup_work_dir()
             self._set_state(RecorderState.FAILED)
             self.failed.emit(
-                "Записать материал не удалось: фрагменты отсутствуют."
+                tr("Записать материал не удалось: фрагменты отсутствуют.")
                 + (f"\n{reason}" if reason else "")
             )
             return
@@ -812,7 +817,7 @@ class ScreenRecorder(QObject):
                 joined, concat_step = self._build_concat_step()
             except OSError as error:
                 self._set_state(RecorderState.FAILED)
-                self.failed.emit(f"Не удалось подготовить склейку фрагментов: {error}")
+                self.failed.emit(tr("Не удалось подготовить склейку фрагментов: {0}").format(error))
                 return
             steps.append(concat_step)
             source = joined
@@ -872,7 +877,7 @@ class ScreenRecorder(QObject):
             str(joined),
         ]
         step = FFmpegStep(
-            label="Склейка фрагментов записи",
+            label=tr("Склейка фрагментов записи"),
             args=args,
             temporary=(list_path,),
         )
@@ -894,7 +899,7 @@ class ScreenRecorder(QObject):
         # доступными пользователю для ручного восстановления.
         self._set_state(RecorderState.FAILED)
         self.failed.emit(
-            f"{message}\n\nИсходные фрагменты сохранены в каталоге {self._work_dir}"
+            tr("{0}\n\nИсходные фрагменты сохранены в каталоге {1}").format(message, self._work_dir)
         )
 
     def _move_into_place(self, source: Path) -> None:
@@ -911,7 +916,7 @@ class ScreenRecorder(QObject):
                 shutil.move(str(source), str(self._job.output_path))
             except OSError as error:
                 self._set_state(RecorderState.FAILED)
-                self.failed.emit(f"Не удалось сохранить файл записи: {error}")
+                self.failed.emit(tr("Не удалось сохранить файл записи: {0}").format(error))
                 return
         self._complete(self._job.output_path)
 
@@ -979,6 +984,8 @@ class ScreenRecorder(QObject):
         # Признак сбрасывается при запуске следующей записи.
         self._drop_warned = True
         self.warning.emit(
-            f"Захват не успевает за заданной частотой: пропущено кадров "
-            f"{report.drop_frames}. Рекомендуется снизить частоту или разрешение."
+            tr(
+                "Захват не успевает за заданной частотой: пропущено кадров {0}. Рекомендуется "
+                "снизить частоту или разрешение."
+            ).format(report.drop_frames)
         )

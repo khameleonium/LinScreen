@@ -14,6 +14,8 @@
 
 from __future__ import annotations
 
+from core.i18n import tr
+
 import os
 import shutil
 import subprocess
@@ -43,10 +45,10 @@ class CaptureMode(str, Enum):
     def label(self) -> str:
         """Название режима для меню трея."""
         return {
-            CaptureMode.REGION: "Выделенная область",
-            CaptureMode.FULLSCREEN: "Весь экран",
-            CaptureMode.WINDOW: "Активное окно",
-            CaptureMode.MONITOR: "Отдельный монитор",
+            CaptureMode.REGION: tr("Выделенная область"),
+            CaptureMode.FULLSCREEN: tr("Весь экран"),
+            CaptureMode.WINDOW: tr("Активное окно"),
+            CaptureMode.MONITOR: tr("Отдельный монитор"),
         }[self]
 
 
@@ -66,7 +68,7 @@ class MonitorInfo:
     def title(self) -> str:
         """Подпись монитора для меню выбора."""
         size = f"{self.geometry.width()}×{self.geometry.height()}"
-        suffix = " (основной)" if self.is_primary else ""
+        suffix = tr(" (основной)") if self.is_primary else ""
         return f"{self.name} — {size}{suffix}"
 
 
@@ -82,7 +84,7 @@ def list_monitors() -> list[MonitorInfo]:
     for screen in QGuiApplication.screens():
         monitors.append(
             MonitorInfo(
-                name=screen.name() or "Экран",
+                name=screen.name() or tr("Экран"),
                 geometry=screen.geometry(),
                 is_primary=screen is primary,
             )
@@ -149,7 +151,7 @@ def grab_virtual_desktop() -> QImage:
     """
     screens = QGuiApplication.screens()
     if not screens:
-        raise CaptureBackendError("Графические экраны не обнаружены")
+        raise CaptureBackendError(tr("Графические экраны не обнаружены"))
 
     if len(screens) == 1:
         # Единственный монитор: снимок экрана уже является снимком всего
@@ -210,7 +212,7 @@ def grab_with_grim(rect: QRect | None = None) -> QImage:
     доступ к содержимому экрана средствами Qt не предоставляется.
     """
     if shutil.which("grim") is None:
-        raise CaptureBackendError("Утилита grim не установлена")
+        raise CaptureBackendError(tr("Утилита grim не установлена"))
 
     args = ["grim"]
     if rect is not None:
@@ -219,17 +221,15 @@ def grab_with_grim(rect: QRect | None = None) -> QImage:
     # Вывод направляется в стандартный поток, файл на диске не создаётся.
     args.append("-")
 
-    completed = subprocess.run(
-        args, capture_output=True, timeout=15, shell=False, check=False
-    )
+    completed = subprocess.run(args, capture_output=True, timeout=15, shell=False, check=False)
     if completed.returncode != 0 or not completed.stdout:
         raise CaptureBackendError(
-            completed.stderr.decode("utf-8", "replace").strip() or "Снимок не получен"
+            completed.stderr.decode("utf-8", "replace").strip() or tr("Снимок не получен")
         )
 
     image = QImage()
     if not image.loadFromData(completed.stdout):
-        raise CaptureBackendError("Не удалось прочитать данные снимка")
+        raise CaptureBackendError(tr("Не удалось прочитать данные снимка"))
     return image
 
 
@@ -339,8 +339,10 @@ def build_video_input(
     """
     if not session.is_x11:
         raise CaptureBackendError(
-            "Прямой захват доступен только в сессии X11. Для Wayland "
-            "применяется поток портала, см. build_pipewire_video_input()."
+            tr(
+                "Прямой захват доступен только в сессии X11. Для Wayland "
+                "применяется поток портала, см. build_pipewire_video_input()."
+            )
         )
 
     ratio = device_pixel_ratio()

@@ -11,6 +11,8 @@
 
 from __future__ import annotations
 
+from core.i18n import tr
+
 import json
 import subprocess
 from dataclasses import dataclass
@@ -48,7 +50,7 @@ class AudioDevice:
     @property
     def title(self) -> str:
         """Подпись для выпадающего списка настроек."""
-        suffix = " (по умолчанию)" if self.is_default else ""
+        suffix = tr(" (по умолчанию)") if self.is_default else ""
         return f"{self.description}{suffix}"
 
     @property
@@ -75,7 +77,7 @@ def _run_pactl(args: Sequence[str]) -> str:
         check=False,
     )
     if completed.returncode != 0:
-        raise RuntimeError(completed.stderr.strip() or "Звуковой сервер не отвечает")
+        raise RuntimeError(completed.stderr.strip() or tr("Звуковой сервер не отвечает"))
     return completed.stdout
 
 
@@ -107,9 +109,7 @@ def _parse_json_sources(payload: str, default_name: str) -> list[AudioDevice]:
         description = entry.get("description") or ""
         if not description or description == "(null)":
             description = (
-                properties.get("node.description")
-                or properties.get("device.description")
-                or name
+                properties.get("node.description") or properties.get("device.description") or name
             )
         devices.append(
             AudioDevice(
@@ -243,7 +243,7 @@ def fallback_devices() -> list[AudioDevice]:
     return [
         AudioDevice(
             name=DEFAULT_SOURCE_NAME,
-            description="Источник по умолчанию",
+            description=tr("Источник по умолчанию"),
             is_monitor=False,
             is_default=True,
         )

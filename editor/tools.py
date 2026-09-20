@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+from core.i18n import tr
+
 from dataclasses import dataclass
 from enum import Enum
 
@@ -24,26 +26,26 @@ class Tool(str, Enum):
     def label(self) -> str:
         """Название инструмента для панели редактора."""
         return {
-            Tool.ARROW: "Стрелка",
-            Tool.RECT: "Рамка",
-            Tool.PENCIL: "Карандаш",
-            Tool.MARKER: "Маркер",
-            Tool.BLUR: "Размытие",
-            Tool.TEXT: "Текст",
-            Tool.STEP: "Нумератор",
+            Tool.ARROW: tr("Стрелка"),
+            Tool.RECT: tr("Рамка"),
+            Tool.PENCIL: tr("Карандаш"),
+            Tool.MARKER: tr("Маркер"),
+            Tool.BLUR: tr("Размытие"),
+            Tool.TEXT: tr("Текст"),
+            Tool.STEP: tr("Нумератор"),
         }[self]
 
     @property
     def hint(self) -> str:
         """Подсказка о способе применения инструмента."""
         return {
-            Tool.ARROW: "Протянуть от начала к цели",
-            Tool.RECT: "Протянуть по диагонали",
-            Tool.PENCIL: "Рисовать с зажатой кнопкой",
-            Tool.MARKER: "Полупрозрачная подсветка",
-            Tool.BLUR: "Выделить область для скрытия",
-            Tool.TEXT: "Щелчок и ввод текста",
-            Tool.STEP: "Щелчок ставит очередной номер",
+            Tool.ARROW: tr("Протянуть от начала к цели"),
+            Tool.RECT: tr("Протянуть по диагонали"),
+            Tool.PENCIL: tr("Рисовать с зажатой кнопкой"),
+            Tool.MARKER: tr("Полупрозрачная подсветка"),
+            Tool.BLUR: tr("Выделить область для скрытия"),
+            Tool.TEXT: tr("Щелчок и ввод текста"),
+            Tool.STEP: tr("Щелчок ставит очередной номер"),
         }[self]
 
 

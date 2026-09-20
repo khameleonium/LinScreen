@@ -19,6 +19,8 @@
 
 from __future__ import annotations
 
+from core.i18n import tr
+
 import os
 import secrets
 import urllib.parse
@@ -62,7 +64,7 @@ def _session_bus() -> QDBusConnection:
     """Подключение к сессионной шине с проверкой работоспособности."""
     bus = QDBusConnection.sessionBus()
     if not bus.isConnected():
-        raise PortalError("Сессионная шина D-Bus недоступна")
+        raise PortalError(tr("Сессионная шина D-Bus недоступна"))
     return bus
 
 
@@ -142,7 +144,7 @@ class PortalRequest(QObject):
             SLOT("onResponse(uint,QVariantMap)"),
         )
         if not connected:
-            raise PortalError("Не удалось подписаться на ответ портала")
+            raise PortalError(tr("Не удалось подписаться на ответ портала"))
 
         # Страховка от зависшего диалога: запрос закрывается принудительно.
         self._timer = QTimer(self)
@@ -169,7 +171,7 @@ class PortalRequest(QObject):
         elif code == RESPONSE_CANCELLED:
             self.cancelled.emit()
         else:
-            self.failed.emit("Портал прервал выполнение запроса")
+            self.failed.emit(tr("Портал прервал выполнение запроса"))
         self.deleteLater()
 
     def close(self) -> None:
@@ -187,7 +189,7 @@ class PortalRequest(QObject):
             return
         self._finished = True
         QDBusInterface(PORTAL_SERVICE, self._path, REQUEST_INTERFACE, self._bus).call("Close")
-        self.failed.emit("Портал не ответил за отведённое время")
+        self.failed.emit(tr("Портал не ответил за отведённое время"))
         self.deleteLater()
 
 
@@ -224,9 +226,7 @@ class ScreenshotPortal(QObject):
         request.failed.connect(self.failed)
         self._request = request
 
-        portal = QDBusInterface(
-            PORTAL_SERVICE, PORTAL_PATH, SCREENSHOT_INTERFACE, _session_bus()
-        )
+        portal = QDBusInterface(PORTAL_SERVICE, PORTAL_PATH, SCREENSHOT_INTERFACE, _session_bus())
         reply = portal.call(
             "Screenshot",
             "",
@@ -234,25 +234,23 @@ class ScreenshotPortal(QObject):
         )
         if reply.errorMessage():
             request.close()
-            self.failed.emit(f"Портал снимков отказал: {reply.errorMessage()}")
+            self.failed.emit(tr("Портал снимков отказал: {0}").format(reply.errorMessage()))
 
     def _on_result(self, results: dict) -> None:
         """Чтение файла, переданного порталом."""
         uri = str(results.get("uri", ""))
         if not uri:
-            self.failed.emit("Портал не вернул путь к снимку")
+            self.failed.emit(tr("Портал не вернул путь к снимку"))
             return
 
         # Портал возвращает адрес в виде URI с процентным кодированием,
         # поэтому обратное преобразование обязательно: без него путь с
         # национальными символами не найдётся на диске.
-        path = QUrl(uri).toLocalFile() or urllib.parse.unquote(
-            uri.removeprefix("file://")
-        )
+        path = QUrl(uri).toLocalFile() or urllib.parse.unquote(uri.removeprefix("file://"))
 
         image = QImage(path)
         if image.isNull():
-            self.failed.emit(f"Не удалось прочитать снимок по пути {path}")
+            self.failed.emit(tr("Не удалось прочитать снимок по пути {0}").format(path))
             return
 
         if self._cleanup:
@@ -301,9 +299,11 @@ class ScreenCastPortal(QObject):
         """Запуск согласования захвата с пользователем."""
         if not is_screencast_available():
             self.failed.emit(
-                "Установленный бэкенд xdg-desktop-portal не предоставляет "
-                "интерфейс ScreenCast. Требуется пакет xdg-desktop-portal-gnome, "
-                "-kde, -wlr или -hyprland."
+                tr(
+                    "Установленный бэкенд xdg-desktop-portal не предоставляет "
+                    "интерфейс ScreenCast. Требуется пакет xdg-desktop-portal-gnome, "
+                    "-kde, -wlr или -hyprland."
+                )
             )
             return
 
@@ -325,19 +325,17 @@ class ScreenCastPortal(QObject):
         )
         if reply.errorMessage():
             request.close()
-            self.failed.emit(f"Портал захвата отказал: {reply.errorMessage()}")
+            self.failed.emit(tr("Портал захвата отказал: {0}").format(reply.errorMessage()))
 
     def _portal(self) -> QDBusInterface:
         """Интерфейс портала захвата экрана."""
-        return QDBusInterface(
-            PORTAL_SERVICE, PORTAL_PATH, SCREENCAST_INTERFACE, _session_bus()
-        )
+        return QDBusInterface(PORTAL_SERVICE, PORTAL_PATH, SCREENCAST_INTERFACE, _session_bus())
 
     def _on_session_created(self, results: dict) -> None:
         """Выбор источников после создания сеанса."""
         self._session_path = str(results.get("session_handle", ""))
         if not self._session_path:
-            self.failed.emit("Портал не вернул идентификатор сеанса")
+            self.failed.emit(tr("Портал не вернул идентификатор сеанса"))
             return
 
         try:
@@ -358,14 +356,12 @@ class ScreenCastPortal(QObject):
                 # за пользователем в диалоге портала.
                 "types": SOURCE_TYPE_MONITOR | SOURCE_TYPE_WINDOW,
                 "multiple": False,
-                "cursor_mode": CURSOR_MODE_EMBEDDED
-                if self._show_cursor
-                else CURSOR_MODE_HIDDEN,
+                "cursor_mode": CURSOR_MODE_EMBEDDED if self._show_cursor else CURSOR_MODE_HIDDEN,
             },
         )
         if reply.errorMessage():
             request.close()
-            self.failed.emit(f"Не удалось выбрать источник: {reply.errorMessage()}")
+            self.failed.emit(tr("Не удалось выбрать источник: {0}").format(reply.errorMessage()))
 
     def _on_sources_selected(self, _results: dict) -> None:
         """Запуск сеанса захвата."""
@@ -383,13 +379,13 @@ class ScreenCastPortal(QObject):
         )
         if reply.errorMessage():
             request.close()
-            self.failed.emit(f"Не удалось запустить захват: {reply.errorMessage()}")
+            self.failed.emit(tr("Не удалось запустить захват: {0}").format(reply.errorMessage()))
 
     def _on_started(self, results: dict) -> None:
         """Получение дескриптора потока PipeWire."""
         streams = results.get("streams") or []
         if not streams:
-            self.failed.emit("Портал не вернул ни одного потока")
+            self.failed.emit(tr("Портал не вернул ни одного потока"))
             return
 
         node_id, properties = self._first_stream(streams)
@@ -398,12 +394,12 @@ class ScreenCastPortal(QObject):
 
         reply = self._portal().call("OpenPipeWireRemote", self._session_path, {})
         if reply.errorMessage():
-            self.failed.emit(f"Не удалось открыть поток: {reply.errorMessage()}")
+            self.failed.emit(tr("Не удалось открыть поток: {0}").format(reply.errorMessage()))
             return
 
         arguments = reply.arguments()
         if not arguments or not isinstance(arguments[0], QDBusUnixFileDescriptor):
-            self.failed.emit("Портал не передал файловый дескриптор потока")
+            self.failed.emit(tr("Портал не передал файловый дескриптор потока"))
             return
 
         # Дескриптор дублируется: копия не наследует признак закрытия при
@@ -429,7 +425,7 @@ class ScreenCastPortal(QObject):
         """Завершение сеанса захвата."""
         if not self._session_path:
             return
-        QDBusInterface(
-            PORTAL_SERVICE, self._session_path, SESSION_INTERFACE, _session_bus()
-        ).call("Close")
+        QDBusInterface(PORTAL_SERVICE, self._session_path, SESSION_INTERFACE, _session_bus()).call(
+            "Close"
+        )
         self._session_path = ""

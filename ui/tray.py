@@ -8,6 +8,8 @@
 
 from __future__ import annotations
 
+from core.i18n import tr
+
 import os
 
 from PySide6.QtCore import QObject, QPointF, QRectF, Qt, Signal
@@ -118,43 +120,61 @@ class TrayIcon(QObject):
 
     def _build_menu(self) -> None:
         """Сборка постоянной части меню."""
-        self._menu.addSection("Снимок экрана")
+        self._menu.addSection(tr("Снимок экрана"))
         self._add_action(
-            "Выделенная область",
+            tr("Выделенная область"),
             lambda: self.screenshotRequested.emit(CaptureMode.REGION),
         )
         self._add_action(
-            "Весь экран",
+            tr("Весь экран"),
             lambda: self.screenshotRequested.emit(CaptureMode.FULLSCREEN),
         )
-        self._add_action("Активное окно", lambda: self.screenshotRequested.emit(CaptureMode.WINDOW))
+        self._add_action(
+            tr("Активное окно"), lambda: self.screenshotRequested.emit(CaptureMode.WINDOW)
+        )
 
         # Подменю мониторов пересобирается перед каждым показом: состав
         # подключённых экранов может измениться во время работы.
-        self._monitor_menu = self._menu.addMenu("Отдельный монитор")
+        self._monitor_menu = self._menu.addMenu(tr("Отдельный монитор"))
         self._menu.aboutToShow.connect(self._rebuild_monitor_menus)
 
-        self._menu.addSection("Запись экрана")
+        self._menu.addSection(tr("Запись экрана"))
         self._record_region_action = self._add_action(
-            "Записать область", lambda: self.recordRequested.emit(CaptureMode.REGION)
+            tr("Записать область"), lambda: self.recordRequested.emit(CaptureMode.REGION)
         )
         self._record_full_action = self._add_action(
-            "Записать весь экран", lambda: self.recordRequested.emit(CaptureMode.FULLSCREEN)
+            tr("Записать весь экран"), lambda: self.recordRequested.emit(CaptureMode.FULLSCREEN)
         )
-        self._record_monitor_menu = self._menu.addMenu("Записать монитор")
+        self._record_monitor_menu = self._menu.addMenu(tr("Записать монитор"))
         self._build_audio_menu()
-        self._pause_action = self._add_action("Пауза", self.pauseRequested.emit)
-        self._stop_action = self._add_action("Остановить запись", self.stopRequested.emit)
+        self._pause_action = self._add_action(tr("Пауза"), self.pauseRequested.emit)
+        self._stop_action = self._add_action(tr("Остановить запись"), self.stopRequested.emit)
 
         self._menu.addSeparator()
-        self._add_action("Папка со снимками", self.openImagesFolderRequested.emit)
-        self._add_action("Папка с записями", self.openVideosFolderRequested.emit)
-        self._add_action("Журнал…", self.logRequested.emit)
-        self._add_action("Настройки…", self.settingsRequested.emit)
+        self._add_action(tr("Папка со снимками"), self.openImagesFolderRequested.emit)
+        self._add_action(tr("Папка с записями"), self.openVideosFolderRequested.emit)
+        self._add_action(tr("Журнал…"), self.logRequested.emit)
+        self._add_action(tr("Настройки…"), self.settingsRequested.emit)
         self._menu.addSeparator()
-        self._add_action("Выход", self.quitRequested.emit)
+        self._add_action(tr("Выход"), self.quitRequested.emit)
 
         self._apply_state_to_menu()
+
+    def rebuild_menu(self) -> None:
+        """
+        Пересборка меню после смены языка интерфейса.
+
+        Пункты создаются заново вместе с подписями; прежние соединения
+        снимаются, иначе обработчик показа вызывался бы многократно.
+        """
+        try:
+            self._menu.aboutToShow.disconnect()
+        except RuntimeError:
+            # Соединений не было: пересборка выполняется впервые.
+            pass
+        self._menu.clear()
+        self._build_menu()
+        self.set_state(self._state)
 
     def _build_audio_menu(self) -> None:
         """
@@ -163,7 +183,7 @@ class TrayIcon(QObject):
         Схема звука выбирается непосредственно перед запуском записи, без
         открытия окна настроек: это самая часто меняемая настройка.
         """
-        self._audio_menu = self._menu.addMenu("Источник звука")
+        self._audio_menu = self._menu.addMenu(tr("Источник звука"))
         group = QActionGroup(self._menu)
         group.setExclusive(True)
         self._audio_actions: dict[AudioMode, QAction] = {}
@@ -216,9 +236,7 @@ class TrayIcon(QObject):
             self._record_monitor_menu.addAction(record)
 
         # Пункты записи мониторов подчиняются общему запрету записи.
-        self._record_monitor_menu.setEnabled(
-            self._recording_allowed and not self._state.is_busy
-        )
+        self._record_monitor_menu.setEnabled(self._recording_allowed and not self._state.is_busy)
 
     def _on_activated(self, reason: QSystemTrayIcon.ActivationReason) -> None:
         """Обработка щелчка по значку."""
@@ -268,11 +286,9 @@ class TrayIcon(QObject):
             self._state in (RecorderState.RECORDING, RecorderState.PAUSED)
         )
         self._pause_action.setText(
-            "Продолжить запись" if self._state is RecorderState.PAUSED else "Пауза"
+            tr("Продолжить запись") if self._state is RecorderState.PAUSED else tr("Пауза")
         )
-        self._stop_action.setEnabled(
-            self._state in (RecorderState.RECORDING, RecorderState.PAUSED)
-        )
+        self._stop_action.setEnabled(self._state in (RecorderState.RECORDING, RecorderState.PAUSED))
         self._record_monitor_menu.setEnabled(self._recording_allowed and not busy)
         # Источник звука меняется только между записями: смена схемы во
         # время записи потребовала бы перезапуска захвата.
@@ -282,7 +298,7 @@ class TrayIcon(QObject):
         """Подсказка со сведениями о состоянии и длительности."""
         text = f"LinScreen — {self._state.label}"
         if self._state in (RecorderState.RECORDING, RecorderState.PAUSED):
-            text += f"\nДлительность: {format_timecode(self._elapsed_ms / 1000)}"
+            text += tr("\nДлительность: {0}").format(format_timecode(self._elapsed_ms / 1000))
         self._tray.setToolTip(text)
 
     def notify(self, title: str, message: str, is_error: bool = False) -> None:

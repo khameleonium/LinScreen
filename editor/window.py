@@ -9,6 +9,8 @@
 
 from __future__ import annotations
 
+from core.i18n import tr
+
 from PySide6.QtCore import QSize, Qt, Signal
 from PySide6.QtGui import (
     QAction,
@@ -48,7 +50,7 @@ class EditorWindow(QMainWindow):
 
     def __init__(self, image: QImage, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self.setWindowTitle(f"Редактор снимка — {image.width()}×{image.height()}")
+        self.setWindowTitle(tr("Редактор снимка — {0}×{1}").format(image.width(), image.height()))
         # Закрытое окно уничтожается вместе со сценой и снимком: иначе
         # каждый снимок навсегда оставался бы в памяти приложения.
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
@@ -70,7 +72,7 @@ class EditorWindow(QMainWindow):
 
     def _build_toolbar(self) -> None:
         """Панель выбора инструмента и параметров рисования."""
-        toolbar = QToolBar("Инструменты", self)
+        toolbar = QToolBar(tr("Инструменты"), self)
         toolbar.setMovable(False)
         toolbar.setIconSize(QSize(18, 18))
         self.addToolBar(Qt.ToolBarArea.TopToolBarArea, toolbar)
@@ -82,7 +84,7 @@ class EditorWindow(QMainWindow):
             action = QAction(tool.label, self)
             action.setCheckable(True)
             # Подсказка содержит и способ применения, и клавишу вызова.
-            action.setToolTip(f"{tool.hint} (клавиша {position})")
+            action.setToolTip(tr("{0} (клавиша {1})").format(tool.hint, position))
             action.triggered.connect(lambda _checked=False, t=tool: self._select_tool(t))
             group.addAction(action)
             toolbar.addAction(action)
@@ -92,20 +94,20 @@ class EditorWindow(QMainWindow):
         toolbar.addSeparator()
 
         # Кнопка выбора цвета показывает текущий цвет собственным фоном.
-        self._color_button = QPushButton("Цвет")
+        self._color_button = QPushButton(tr("Цвет"))
         self._color_button.setFixedWidth(90)
         self._color_button.clicked.connect(self._choose_color)
         toolbar.addWidget(self._color_button)
         self._apply_color_button()
 
-        toolbar.addWidget(QLabel("  Толщина "))
+        toolbar.addWidget(QLabel(tr("  Толщина ")))
         self._width_spin = QSpinBox()
         self._width_spin.setRange(1, 40)
         self._width_spin.setValue(self._scene.settings.width)
         self._width_spin.valueChanged.connect(self._set_width)
         toolbar.addWidget(self._width_spin)
 
-        toolbar.addWidget(QLabel("  Размер текста "))
+        toolbar.addWidget(QLabel(tr("  Размер текста ")))
         self._font_spin = QSpinBox()
         self._font_spin.setRange(6, 96)
         self._font_spin.setValue(self._scene.settings.font_size)
@@ -114,42 +116,42 @@ class EditorWindow(QMainWindow):
 
     def _build_actions_bar(self) -> None:
         """Панель быстрых действий с готовым изображением."""
-        toolbar = QToolBar("Действия", self)
+        toolbar = QToolBar(tr("Действия"), self)
         toolbar.setMovable(False)
         self.addToolBar(Qt.ToolBarArea.BottomToolBarArea, toolbar)
 
-        self._undo_action = QAction("Отменить", self)
+        self._undo_action = QAction(tr("Отменить"), self)
         self._undo_action.setShortcut(QKeySequence.StandardKey.Undo)
         self._undo_action.triggered.connect(self._scene.undo)
         toolbar.addAction(self._undo_action)
 
-        self._redo_action = QAction("Вернуть", self)
+        self._redo_action = QAction(tr("Вернуть"), self)
         self._redo_action.setShortcut(QKeySequence.StandardKey.Redo)
         self._redo_action.triggered.connect(self._scene.redo)
         toolbar.addAction(self._redo_action)
 
-        clear_action = QAction("Очистить", self)
+        clear_action = QAction(tr("Очистить"), self)
         clear_action.triggered.connect(self._scene.clear_annotations)
         toolbar.addAction(clear_action)
 
         toolbar.addSeparator()
 
-        copy_action = QAction("Копировать", self)
+        copy_action = QAction(tr("Копировать"), self)
         copy_action.setShortcut(QKeySequence.StandardKey.Copy)
         copy_action.triggered.connect(self._emit_copy)
         toolbar.addAction(copy_action)
 
-        save_action = QAction("Сохранить", self)
+        save_action = QAction(tr("Сохранить"), self)
         save_action.setShortcut(QKeySequence.StandardKey.Save)
         save_action.triggered.connect(self._emit_save)
         toolbar.addAction(save_action)
 
-        save_as_action = QAction("Сохранить как…", self)
+        save_as_action = QAction(tr("Сохранить как…"), self)
         save_as_action.setShortcut(QKeySequence.StandardKey.SaveAs)
         save_as_action.triggered.connect(self._emit_save_as)
         toolbar.addAction(save_as_action)
 
-        close_action = QAction("Закрыть", self)
+        close_action = QAction(tr("Закрыть"), self)
         close_action.setShortcut(QKeySequence(Qt.Key.Key_Escape))
         close_action.triggered.connect(self.close)
         toolbar.addAction(close_action)
@@ -163,9 +165,7 @@ class EditorWindow(QMainWindow):
         for position, tool in enumerate(Tool, start=1):
             action = QAction(self)
             action.setShortcut(QKeySequence(str(position)))
-            action.triggered.connect(
-                lambda _checked=False, t=tool: self._activate_tool(t)
-            )
+            action.triggered.connect(lambda _checked=False, t=tool: self._activate_tool(t))
             self.addAction(action)
 
         remove = QAction(self)
@@ -206,9 +206,7 @@ class EditorWindow(QMainWindow):
 
     def _choose_color(self) -> None:
         """Выбор цвета рисования."""
-        chosen = QColorDialog.getColor(
-            self._scene.settings.color, self, "Цвет аннотаций"
-        )
+        chosen = QColorDialog.getColor(self._scene.settings.color, self, tr("Цвет аннотаций"))
         if chosen.isValid():
             self._scene.settings.color = chosen
             self._apply_color_button()
@@ -218,9 +216,7 @@ class EditorWindow(QMainWindow):
         color: QColor = self._scene.settings.color
         # Подпись подбирается контрастной к фону кнопки.
         text_color = "#000000" if color.lightness() > 140 else "#ffffff"
-        self._color_button.setStyleSheet(
-            f"background-color: {color.name()}; color: {text_color};"
-        )
+        self._color_button.setStyleSheet(f"background-color: {color.name()}; color: {text_color};")
 
     def _set_width(self, value: int) -> None:
         """Изменение толщины линии."""

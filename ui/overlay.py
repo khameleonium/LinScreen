@@ -11,6 +11,8 @@
 
 from __future__ import annotations
 
+from core.i18n import tr
+
 from PySide6.QtCore import QPoint, QRect, Qt, Signal
 from PySide6.QtGui import (
     QColor,
@@ -45,7 +47,7 @@ class RegionOverlay(QWidget):
         self,
         desktop: QImage,
         virtual_rect: QRect,
-        hint: str = "Выделите область: ЛКМ — выбор, Esc — отмена, Enter — весь экран",
+        hint: str = tr("Выделите область: ЛКМ — выбор, Esc — отмена, Enter — весь экран"),
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
@@ -121,16 +123,22 @@ class RegionOverlay(QWidget):
             dim = QColor(0, 0, 0, DIM_ALPHA)
             painter.fillRect(QRect(0, 0, target.width(), selection.top()), dim)
             painter.fillRect(
-                QRect(0, selection.bottom() + 1, target.width(),
-                      target.height() - selection.bottom() - 1),
+                QRect(
+                    0,
+                    selection.bottom() + 1,
+                    target.width(),
+                    target.height() - selection.bottom() - 1,
+                ),
                 dim,
             )
+            painter.fillRect(QRect(0, selection.top(), selection.left(), selection.height()), dim)
             painter.fillRect(
-                QRect(0, selection.top(), selection.left(), selection.height()), dim
-            )
-            painter.fillRect(
-                QRect(selection.right() + 1, selection.top(),
-                      target.width() - selection.right() - 1, selection.height()),
+                QRect(
+                    selection.right() + 1,
+                    selection.top(),
+                    target.width() - selection.right() - 1,
+                    selection.height(),
+                ),
                 dim,
             )
 

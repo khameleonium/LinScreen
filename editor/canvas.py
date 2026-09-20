@@ -154,9 +154,7 @@ class AnnotationScene(QGraphicsScene):
             stroke.start(position)
             created = stroke
         elif self.tool is Tool.BLUR:
-            created = BlurItem(
-                self._image, QRectF(position, position), self.settings.blur_factor
-            )
+            created = BlurItem(self._image, QRectF(position, position), self.settings.blur_factor)
         elif self.tool is Tool.TEXT:
             self._create_label(position)
         elif self.tool is Tool.STEP:

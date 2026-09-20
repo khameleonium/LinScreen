@@ -20,6 +20,8 @@
 
 from __future__ import annotations
 
+from core.i18n import tr
+
 import shlex
 from dataclasses import dataclass, replace
 from enum import Enum
@@ -195,11 +197,11 @@ class AudioMode(str, Enum):
     def label(self) -> str:
         """Человекочитаемое название для выпадающего списка интерфейса."""
         return {
-            AudioMode.NONE: "Без звука",
-            AudioMode.SYSTEM: "Системный звук",
-            AudioMode.MICROPHONE: "Микрофон",
-            AudioMode.MIX: "Микс обоих",
-            AudioMode.SEPARATE: "Раздельные дорожки",
+            AudioMode.NONE: tr("Без звука"),
+            AudioMode.SYSTEM: tr("Системный звук"),
+            AudioMode.MICROPHONE: tr("Микрофон"),
+            AudioMode.MIX: tr("Микс обоих"),
+            AudioMode.SEPARATE: tr("Раздельные дорожки"),
         }[self]
 
 
@@ -626,14 +628,14 @@ class VideoProfileManager:
         try:
             return self._video_profiles[identifier]
         except KeyError as error:
-            raise KeyError(f"Неизвестный видеопрофиль: {identifier}") from error
+            raise KeyError(tr("Неизвестный видеопрофиль: {0}").format(identifier)) from error
 
     def animation_profile(self, identifier: str) -> AnimationProfile:
         """Поиск профиля анимации по идентификатору."""
         try:
             return self._animation_profiles[identifier]
         except KeyError as error:
-            raise KeyError(f"Неизвестный профиль анимации: {identifier}") from error
+            raise KeyError(tr("Неизвестный профиль анимации: {0}").format(identifier)) from error
 
     def register(self, profile: VideoProfile) -> None:
         """Добавление или замена пользовательского профиля."""
@@ -682,9 +684,7 @@ class VideoProfileManager:
         # поэтому используется как универсальный запасной вариант.
         return replace(profile, audio_codec=AudioCodec.AAC)
 
-    def apply_overrides(
-        self, profile: VideoProfile, overrides: ProfileOverrides
-    ) -> VideoProfile:
+    def apply_overrides(self, profile: VideoProfile, overrides: ProfileOverrides) -> VideoProfile:
         """
         Наложение пользовательских уточнений на профиль.
 
@@ -754,7 +754,7 @@ class VideoProfileManager:
         не участвует, поэтому пробелы в путях безопасны.
         """
         if "{output}" not in template:
-            raise ValueError("В образце команды отсутствует подстановка {output}")
+            raise ValueError(tr("В образце команды отсутствует подстановка {output}"))
 
         scalars = {
             "{fps}": str(video_input.fps),
@@ -784,7 +784,7 @@ class VideoProfileManager:
                 command.append(token)
 
         if not command:
-            raise ValueError("Образец команды пуст")
+            raise ValueError(tr("Образец команды пуст"))
         if command[0] != self._ffmpeg_path:
             # Образец без подстановки {ffmpeg} начинается сразу с аргументов.
             command = [self._ffmpeg_path, *command]
@@ -830,7 +830,7 @@ class VideoProfileManager:
         body = command[1:]
         skipped = self._global_args(overwrite=True, report_progress=False)
         if body[: len(skipped)] == skipped:
-            body = body[len(skipped):]
+            body = body[len(skipped) :]
 
         # Обозначения оставляются без кавычек ради читаемости, остальные
         # аргументы экранируются: образец разбирается по правилам оболочки.
@@ -849,10 +849,8 @@ class VideoProfileManager:
     ) -> FFmpegStep:
         """Обёртка ручной команды в объект шага для контроллера процесса."""
         return FFmpegStep(
-            label="Запись по заданной команде",
-            args=self.build_custom_command(
-                template, video_input, output_path, audio_inputs
-            ),
+            label=tr("Запись по заданной команде"),
+            args=self.build_custom_command(template, video_input, output_path, audio_inputs),
         )
 
     def validate(
@@ -865,28 +863,35 @@ class VideoProfileManager:
 
         if not self.is_encoder_available(profile.video_codec.encoder):
             problems.append(
-                f"Видеокодер {profile.video_codec.encoder} отсутствует в сборке FFmpeg."
+                tr("Видеокодер {0} отсутствует в сборке FFmpeg.").format(
+                    profile.video_codec.encoder
+                )
             )
         if not self.is_encoder_available(profile.audio_codec.encoder):
             problems.append(
-                f"Аудиокодер {profile.audio_codec.encoder} отсутствует в сборке FFmpeg."
+                tr("Аудиокодер {0} отсутствует в сборке FFmpeg.").format(
+                    profile.audio_codec.encoder
+                )
             )
         if audio_mode is AudioMode.SEPARATE and not profile.container.supports_multitrack_audio:
             problems.append(
-                f"Контейнер {profile.container.value.upper()} не хранит несколько "
-                "дорожек: звук будет сведён через amix."
+                tr(
+                    "Контейнер {0} не хранит несколько дорожек: звук будет сведён через amix."
+                ).format(profile.container.value.upper())
             )
         if profile.container is Container.WEBM and profile.video_codec not in (
             VideoCodec.VP9,
             VideoCodec.AV1,
         ):
-            problems.append("WebM допускает только VP9 или AV1.")
+            problems.append(tr("WebM допускает только VP9 или AV1."))
         if profile.container is Container.WEBM and profile.audio_codec is not AudioCodec.OPUS:
-            problems.append("WebM допускает только звук Opus.")
+            problems.append(tr("WebM допускает только звук Opus."))
         if not profile.container.survives_crash:
             problems.append(
-                "Формат не восстанавливается после аварийного завершения: "
-                "для длительных записей предпочтителен MKV."
+                tr(
+                    "Формат не восстанавливается после аварийного завершения: "
+                    "для длительных записей предпочтителен MKV."
+                )
             )
         return problems
 
@@ -957,7 +962,7 @@ class VideoProfileManager:
     ) -> FFmpegStep:
         """Обёртка команды записи в объект шага для контроллера процесса."""
         return FFmpegStep(
-            label=f"Запись: {profile.title}",
+            label=tr("Запись: {0}").format(tr(profile.title)),
             args=self.build_record_command(
                 profile, video_input, output_path, audio_inputs, audio_mode
             ),
@@ -985,7 +990,7 @@ class VideoProfileManager:
             return [self._webp_step(profile, source_path, output_path)]
         if profile.container is Container.APNG:
             return [self._apng_step(profile, source_path, output_path)]
-        raise ValueError(f"Формат {profile.container} не является анимированным")
+        raise ValueError(tr("Формат {0} не является анимированным").format(profile.container))
 
     def intermediate_profile(self) -> VideoProfile:
         """
@@ -1021,7 +1026,7 @@ class VideoProfileManager:
             f":stats_mode={profile.palette_stats_mode}"
         )
         pass_one = FFmpegStep(
-            label="GIF, проход 1 из 2: построение палитры",
+            label=tr("GIF, проход 1 из 2: построение палитры"),
             args=[
                 self._ffmpeg_path,
                 *self._global_args(overwrite=True, report_progress=True),
@@ -1055,7 +1060,7 @@ class VideoProfileManager:
             ":diff_mode=rectangle:new=1[out]"
         )
         pass_two = FFmpegStep(
-            label="GIF, проход 2 из 2: наложение палитры",
+            label=tr("GIF, проход 2 из 2: наложение палитры"),
             args=[
                 self._ffmpeg_path,
                 *self._global_args(overwrite=True, report_progress=True),
@@ -1123,7 +1128,7 @@ class VideoProfileManager:
             *profile.extra_output_args,
             str(output_path),
         ]
-        return FFmpegStep(label="Сборка анимированного WebP", args=args)
+        return FFmpegStep(label=tr("Сборка анимированного WebP"), args=args)
 
     def _apng_step(
         self,
@@ -1150,7 +1155,7 @@ class VideoProfileManager:
             *profile.extra_output_args,
             str(output_path),
         ]
-        return FFmpegStep(label="Сборка APNG", args=args)
+        return FFmpegStep(label=tr("Сборка APNG"), args=args)
 
     # ------------------------------------------------ внутренние сборщики
 
@@ -1235,12 +1240,18 @@ class VideoProfileManager:
             # Третья версия формата поддерживает срезы и контрольные суммы,
             # что позволяет восстановить файл после повреждения.
             args += [
-                "-level", "3",
-                "-coder", "1",
-                "-context", "1",
-                "-g", "1",
-                "-slices", "24",
-                "-slicecrc", "1",
+                "-level",
+                "3",
+                "-coder",
+                "1",
+                "-context",
+                "1",
+                "-g",
+                "1",
+                "-slices",
+                "24",
+                "-slicecrc",
+                "1",
             ]
         elif codec is VideoCodec.PRORES:
             args += ["-profile:v", str(_PRORES_PROFILES.get(profile.preset, 3))]

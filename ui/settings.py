@@ -9,6 +9,8 @@
 
 from __future__ import annotations
 
+from core.i18n import tr
+
 from pathlib import Path
 
 from PySide6.QtCore import Qt, Signal
@@ -41,6 +43,7 @@ from core.autostart import (
     set_menu_entry,
 )
 from core.config import ConfigManager
+from core.i18n import available_languages
 from core.session import DesktopSession
 from core.workers import run_async
 from encoder.images import FORMAT_TITLES
@@ -60,7 +63,7 @@ class PathChooser(QWidget):
         super().__init__(parent)
         self._edit = QLineEdit(value)
         self._edit.setPlaceholderText(placeholder)
-        button = QPushButton("Обзор…")
+        button = QPushButton(tr("Обзор…"))
         button.clicked.connect(self._choose)
 
         layout = QHBoxLayout(self)
@@ -71,7 +74,7 @@ class PathChooser(QWidget):
     def _choose(self) -> None:
         """Выбор каталога системным диалогом."""
         current = self._edit.text() or str(Path.home())
-        chosen = QFileDialog.getExistingDirectory(self, "Выбор каталога", current)
+        chosen = QFileDialog.getExistingDirectory(self, tr("Выбор каталога"), current)
         if chosen:
             self._edit.setText(chosen)
 
@@ -101,21 +104,21 @@ class SettingsDialog(QDialog):
         self._diagnostics = diagnostics
         self._devices: list[AudioDevice] = []
 
-        self.setWindowTitle("Настройки LinScreen")
+        self.setWindowTitle(tr("Настройки LinScreen"))
         self.setMinimumWidth(560)
 
         tabs = QTabWidget(self)
-        tabs.addTab(self._build_general_tab(), "Общие")
-        tabs.addTab(self._build_image_tab(), "Снимки")
-        tabs.addTab(self._build_video_tab(), "Запись")
-        tabs.addTab(self._build_encoding_tab(), "Кодирование")
-        tabs.addTab(self._build_hotkey_tab(), "Клавиши")
+        tabs.addTab(self._build_general_tab(), tr("Общие"))
+        tabs.addTab(self._build_image_tab(), tr("Снимки"))
+        tabs.addTab(self._build_video_tab(), tr("Запись"))
+        tabs.addTab(self._build_encoding_tab(), tr("Кодирование"))
+        tabs.addTab(self._build_hotkey_tab(), tr("Клавиши"))
 
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel
         )
-        buttons.button(QDialogButtonBox.StandardButton.Save).setText("Сохранить")
-        buttons.button(QDialogButtonBox.StandardButton.Cancel).setText("Отмена")
+        buttons.button(QDialogButtonBox.StandardButton.Save).setText(tr("Сохранить"))
+        buttons.button(QDialogButtonBox.StandardButton.Cancel).setText(tr("Отмена"))
         buttons.accepted.connect(self._apply)
         buttons.rejected.connect(self.reject)
 
@@ -136,63 +139,75 @@ class SettingsDialog(QDialog):
 
         self._images_dir = PathChooser(settings.paths.images_dir, str(self._config.images_dir()))
         self._videos_dir = PathChooser(settings.paths.videos_dir, str(self._config.videos_dir()))
-        form.addRow("Каталог снимков:", self._images_dir)
-        form.addRow("Каталог записей:", self._videos_dir)
+        form.addRow(tr("Каталог снимков:"), self._images_dir)
+        form.addRow(tr("Каталог записей:"), self._videos_dir)
 
         self._image_template = QLineEdit(settings.paths.image_template)
         self._video_template = QLineEdit(settings.paths.video_template)
         # Шаблон обрабатывается функцией strftime, поэтому в подсказке
         # приводятся её управляющие последовательности.
-        hint = "Допустимы подстановки strftime: %Y, %m, %d, %H, %M, %S"
+        hint = tr("Допустимы подстановки strftime: %Y, %m, %d, %H, %M, %S")
         self._image_template.setToolTip(hint)
         self._video_template.setToolTip(hint)
-        form.addRow("Шаблон имени снимка:", self._image_template)
-        form.addRow("Шаблон имени записи:", self._video_template)
+        form.addRow(tr("Шаблон имени снимка:"), self._image_template)
+        form.addRow(tr("Шаблон имени записи:"), self._video_template)
 
         self._ffmpeg_path = QLineEdit(settings.general.ffmpeg_path)
-        self._ffmpeg_path.setPlaceholderText("Определяется автоматически")
-        form.addRow("Путь к FFmpeg:", self._ffmpeg_path)
+        self._ffmpeg_path.setPlaceholderText(tr("Определяется автоматически"))
+        form.addRow(tr("Путь к FFmpeg:"), self._ffmpeg_path)
 
-        self._copy_clipboard = QCheckBox("Копировать снимок в буфер обмена")
+        self._copy_clipboard = QCheckBox(tr("Копировать снимок в буфер обмена"))
         self._copy_clipboard.setChecked(settings.general.copy_to_clipboard)
         form.addRow(self._copy_clipboard)
 
-        self._open_editor = QCheckBox("Открывать редактор после снимка")
+        self._open_editor = QCheckBox(tr("Открывать редактор после снимка"))
         self._open_editor.setChecked(settings.general.open_editor_after_capture)
         form.addRow(self._open_editor)
 
-        self._notifications = QCheckBox("Показывать всплывающие уведомления")
+        self._notifications = QCheckBox(tr("Показывать всплывающие уведомления"))
         self._notifications.setChecked(settings.general.show_notifications)
         self._notifications.setToolTip(
-            "Отключение убирает всплывающие окна. Сообщения продолжают "
-            "записываться в журнал и в файл журнала."
+            tr(
+                "Отключение убирает всплывающие окна. Сообщения продолжают "
+                "записываться в журнал и в файл журнала."
+            )
         )
         form.addRow(self._notifications)
 
-        self._hide_while_recording = QCheckBox(
-            "Скрывать окна программы во время записи"
-        )
+        self._hide_while_recording = QCheckBox(tr("Скрывать окна программы во время записи"))
         self._hide_while_recording.setChecked(settings.general.hide_while_recording)
         self._hide_while_recording.setToolTip(
-            "Панель записи и окна программы не попадут в кадр. "
-            "Управление остаётся через значок в трее и горячие клавиши."
+            tr(
+                "Панель записи и окна программы не попадут в кадр. "
+                "Управление остаётся через значок в трее и горячие клавиши."
+            )
         )
         form.addRow(self._hide_while_recording)
+
+        self._language = QComboBox()
+        # Порядок выбора: определение по окружению и найденные словари.
+        self._language.addItem(tr("Как в системе"), "auto")
+        for code, title in available_languages().items():
+            self._language.addItem(title, code)
+        index = self._language.findData(settings.general.language)
+        self._language.setCurrentIndex(max(0, index))
+        self._language.setToolTip(tr("Язык применяется сразу после сохранения настроек."))
+        form.addRow(tr("Язык интерфейса:"), self._language)
 
         self._delay = QSpinBox()
         self._delay.setRange(0, 15000)
         self._delay.setSingleStep(250)
-        self._delay.setSuffix(" мс")
+        self._delay.setSuffix(tr(" мс"))
         self._delay.setValue(settings.general.capture_delay_ms)
-        form.addRow("Задержка перед снимком:", self._delay)
+        form.addRow(tr("Задержка перед снимком:"), self._delay)
 
-        self._autostart = QCheckBox("Запускать при входе в систему")
+        self._autostart = QCheckBox(tr("Запускать при входе в систему"))
         # Состояние читается с диска: файл автозапуска мог быть изменён
         # вне приложения.
         self._autostart.setChecked(autostart_is_enabled())
         form.addRow(self._autostart)
 
-        self._menu_entry = QCheckBox("Показывать в меню приложений")
+        self._menu_entry = QCheckBox(tr("Показывать в меню приложений"))
         self._menu_entry.setChecked(menu_entry_installed())
         form.addRow(self._menu_entry)
 
@@ -201,25 +216,23 @@ class SettingsDialog(QDialog):
         # их между машинами.
         transfer = QHBoxLayout()
         transfer.setContentsMargins(0, 0, 0, 0)
-        export_button = QPushButton("Экспорт настроек…")
+        export_button = QPushButton(tr("Экспорт настроек…"))
         export_button.clicked.connect(self._export_settings)
-        import_button = QPushButton("Импорт настроек…")
+        import_button = QPushButton(tr("Импорт настроек…"))
         import_button.clicked.connect(self._import_settings)
         transfer.addWidget(export_button)
         transfer.addWidget(import_button)
         transfer_widget = QWidget()
         transfer_widget.setLayout(transfer)
-        form.addRow("Перенос настроек:", transfer_widget)
+        form.addRow(tr("Перенос настроек:"), transfer_widget)
 
-        location = QLabel(f"Файл настроек: {self._config.path}")
+        location = QLabel(tr("Файл настроек: {0}").format(self._config.path))
         location.setWordWrap(True)
-        location.setTextInteractionFlags(
-            Qt.TextInteractionFlag.TextSelectableByMouse
-        )
+        location.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         form.addRow(location)
 
         summary = QLabel(
-            f"Тип сессии: {self._session.session_type.label}"
+            tr("Тип сессии: {0}").format(self._session.session_type.label)
             + (f"\n{self._diagnostics}" if self._diagnostics else "")
         )
         summary.setWordWrap(True)
@@ -231,37 +244,39 @@ class SettingsDialog(QDialog):
         # Перед выгрузкой применяются значения из полей окна, иначе в
         # копию попали бы прежние настройки.
         self._collect()
-        suggested = str(Path.home() / "linscreen-настройки.ini")
+        suggested = str(Path.home() / tr("linscreen-настройки.ini"))
         chosen, _filter = QFileDialog.getSaveFileName(
-            self, "Экспорт настроек", suggested, "Файлы настроек (*.ini)"
+            self, tr("Экспорт настроек"), suggested, tr("Файлы настроек (*.ini)")
         )
         if not chosen:
             return
         try:
             self._config.export_to(Path(chosen))
         except OSError as error:
-            QMessageBox.warning(self, "Экспорт настроек", f"Не удалось записать: {error}")
+            QMessageBox.warning(
+                self, tr("Экспорт настроек"), tr("Не удалось записать: {0}").format(error)
+            )
             return
-        QMessageBox.information(self, "Экспорт настроек", f"Сохранено: {chosen}")
+        QMessageBox.information(self, tr("Экспорт настроек"), tr("Сохранено: {0}").format(chosen))
 
     def _import_settings(self) -> None:
         """Чтение настроек из выбранного файла с закрытием окна."""
         chosen, _filter = QFileDialog.getOpenFileName(
-            self, "Импорт настроек", str(Path.home()), "Файлы настроек (*.ini *.conf)"
+            self, tr("Импорт настроек"), str(Path.home()), tr("Файлы настроек (*.ini *.conf)")
         )
         if not chosen:
             return
         try:
             self._config.import_from(Path(chosen))
         except (OSError, ValueError) as error:
-            QMessageBox.warning(self, "Импорт настроек", f"Не удалось прочитать: {error}")
+            QMessageBox.warning(
+                self, tr("Импорт настроек"), tr("Не удалось прочитать: {0}").format(error)
+            )
             return
 
         # Поля окна отражают прежние значения, поэтому окно закрывается:
         # приложение применяет прочитанные настройки целиком.
-        QMessageBox.information(
-            self, "Импорт настроек", "Настройки прочитаны и применены."
-        )
+        QMessageBox.information(self, tr("Импорт настроек"), tr("Настройки прочитаны и применены."))
         self.settingsSaved.emit()
         self.accept()
 
@@ -273,35 +288,35 @@ class SettingsDialog(QDialog):
 
         self._image_format = QComboBox()
         for key, title in FORMAT_TITLES.items():
-            self._image_format.addItem(title, key)
+            self._image_format.addItem(tr(title), key)
         index = self._image_format.findData(settings.image_format)
         self._image_format.setCurrentIndex(max(0, index))
-        form.addRow("Формат снимков:", self._image_format)
+        form.addRow(tr("Формат снимков:"), self._image_format)
 
         self._png_compression = QSpinBox()
         self._png_compression.setRange(0, 9)
         self._png_compression.setValue(settings.png_compression)
-        self._png_compression.setToolTip("0 — без сжатия, 9 — наименьший размер файла")
-        form.addRow("Сжатие PNG:", self._png_compression)
+        self._png_compression.setToolTip(tr("0 — без сжатия, 9 — наименьший размер файла"))
+        form.addRow(tr("Сжатие PNG:"), self._png_compression)
 
         self._jpeg_quality = QSpinBox()
         self._jpeg_quality.setRange(1, 100)
         self._jpeg_quality.setValue(settings.jpeg_quality)
-        form.addRow("Качество JPEG:", self._jpeg_quality)
+        form.addRow(tr("Качество JPEG:"), self._jpeg_quality)
 
         self._webp_quality = QSpinBox()
         self._webp_quality.setRange(1, 99)
         self._webp_quality.setValue(settings.webp_quality)
-        form.addRow("Качество WEBP:", self._webp_quality)
+        form.addRow(tr("Качество WEBP:"), self._webp_quality)
 
-        self._webp_lossless = QCheckBox("WEBP без потерь")
+        self._webp_lossless = QCheckBox(tr("WEBP без потерь"))
         self._webp_lossless.setChecked(settings.webp_lossless)
         form.addRow(self._webp_lossless)
 
         self._avif_quality = QSpinBox()
         self._avif_quality.setRange(1, 100)
         self._avif_quality.setValue(settings.avif_quality)
-        form.addRow("Качество AVIF:", self._avif_quality)
+        form.addRow(tr("Качество AVIF:"), self._avif_quality)
         return page
 
     def _build_video_tab(self) -> QWidget:
@@ -316,22 +331,26 @@ class SettingsDialog(QDialog):
             # доступный. Замена показывается заранее, а не обнаруживается
             # пользователем по содержимому готового файла.
             resolved = self._profiles.resolve(profile)
-            title = profile.title
+            # Названия профилей объявлены на уровне модуля, поэтому
+            # переводятся в месте показа.
+            title = tr(profile.title)
             if resolved.video_codec is not profile.video_codec:
-                title += f" → будет записан как {resolved.video_codec.encoder}"
+                title += tr(" → будет записан как {0}").format(resolved.video_codec.encoder)
             self._profile.addItem(title, profile.identifier)
         for animation in self._profiles.animation_profiles():
-            self._profile.addItem(f"Анимация: {animation.title}", animation.identifier)
+            self._profile.addItem(
+                tr("Анимация: {0}").format(tr(animation.title)), animation.identifier
+            )
         index = self._profile.findData(settings.profile_id)
         self._profile.setCurrentIndex(max(0, index))
-        form.addRow("Профиль записи:", self._profile)
+        form.addRow(tr("Профиль записи:"), self._profile)
 
         self._fps = QSpinBox()
         self._fps.setRange(1, 144)
         self._fps.setValue(settings.fps)
-        form.addRow("Частота кадров:", self._fps)
+        form.addRow(tr("Частота кадров:"), self._fps)
 
-        self._show_cursor = QCheckBox("Записывать указатель мыши")
+        self._show_cursor = QCheckBox(tr("Записывать указатель мыши"))
         self._show_cursor.setChecked(settings.show_cursor)
         form.addRow(self._show_cursor)
 
@@ -340,14 +359,14 @@ class SettingsDialog(QDialog):
             self._audio_mode.addItem(mode.label, mode.value)
         index = self._audio_mode.findData(settings.audio_mode)
         self._audio_mode.setCurrentIndex(max(0, index))
-        form.addRow("Источник звука:", self._audio_mode)
+        form.addRow(tr("Источник звука:"), self._audio_mode)
 
         self._system_device = QComboBox()
         self._microphone_device = QComboBox()
         for combo in (self._system_device, self._microphone_device):
-            combo.addItem("Устройство по умолчанию", "")
-        form.addRow("Системный звук:", self._system_device)
-        form.addRow("Микрофон:", self._microphone_device)
+            combo.addItem(tr("Устройство по умолчанию"), "")
+        form.addRow(tr("Системный звук:"), self._system_device)
+        form.addRow(tr("Микрофон:"), self._microphone_device)
         return page
 
     def _build_encoding_tab(self) -> QWidget:
@@ -368,16 +387,18 @@ class SettingsDialog(QDialog):
         form.addRow(self._profile_title)
 
         explanation = QLabel(
-            "Значения ниже уточняют выбранный профиль записи. Вариант "
-            "«как в профиле» показывает в скобках, что именно задаёт сам "
-            "профиль. Профиль выбирается на вкладке «Запись»."
+            tr(
+                "Значения ниже уточняют выбранный профиль записи. Вариант "
+                "«как в профиле» показывает в скобках, что именно задаёт сам "
+                "профиль. Профиль выбирается на вкладке «Запись»."
+            )
         )
         explanation.setWordWrap(True)
         form.addRow(explanation)
 
         # --- Видео ---
         self._video_codec = QComboBox()
-        self._video_codec.addItem("Как в профиле", "")
+        self._video_codec.addItem(tr("Как в профиле"), "")
         for codec in (
             VideoCodec.H264,
             VideoCodec.H265,
@@ -388,30 +409,32 @@ class SettingsDialog(QDialog):
             VideoCodec.MPEG4,
         ):
             available = self._profiles.is_encoder_available(codec.encoder)
-            title = codec.encoder + ("" if available else " (нет в сборке)")
+            title = codec.encoder + ("" if available else tr(" (нет в сборке)"))
             self._video_codec.addItem(title, codec.value)
         index = self._video_codec.findData(settings.video_codec)
         self._video_codec.setCurrentIndex(max(0, index))
-        form.addRow("Энкодер видео:", self._video_codec)
+        form.addRow(tr("Энкодер видео:"), self._video_codec)
 
         # Способы управления качеством исключают друг друга, как и в
         # прочих программах записи экрана.
-        self._rate_crf = QRadioButton("Постоянное качество (CRF)")
-        self._rate_bitrate = QRadioButton("Заданный битрейт")
+        self._rate_crf = QRadioButton(tr("Постоянное качество (CRF)"))
+        self._rate_bitrate = QRadioButton(tr("Заданный битрейт"))
         self._rate_crf.setChecked(settings.rate_mode != "bitrate")
         self._rate_bitrate.setChecked(settings.rate_mode == "bitrate")
 
         self._crf = QSpinBox()
         self._crf.setRange(0, 63)
-        self._crf.setSpecialValueText("как в профиле")
+        self._crf.setSpecialValueText(tr("как в профиле"))
         self._crf.setValue(settings.crf)
         self._crf.setToolTip(
-            "Меньше значение — выше качество и больше файл. "
-            "Типичные значения: 18–23 для H.264, 24–28 для H.265, 30–36 для AV1."
+            tr(
+                "Меньше значение — выше качество и больше файл. "
+                "Типичные значения: 18–23 для H.264, 24–28 для H.265, 30–36 для AV1."
+            )
         )
 
         self._video_bitrate = QLineEdit(settings.video_bitrate)
-        self._video_bitrate.setPlaceholderText("например 8000k")
+        self._video_bitrate.setPlaceholderText(tr("например 8000k"))
 
         quality_row = QHBoxLayout()
         quality_row.setContentsMargins(0, 0, 0, 0)
@@ -421,7 +444,7 @@ class SettingsDialog(QDialog):
         quality_row.addWidget(self._video_bitrate)
         quality_widget = QWidget()
         quality_widget.setLayout(quality_row)
-        form.addRow("Качество:", quality_widget)
+        form.addRow(tr("Качество:"), quality_widget)
 
         self._rate_crf.toggled.connect(self._update_rate_controls)
         self._update_rate_controls()
@@ -444,60 +467,64 @@ class SettingsDialog(QDialog):
         )
         self._preset.setCurrentText(settings.preset)
         self._preset.setToolTip(
-            "Скорость кодирования. Пустое поле — значение профиля. "
-            "Для ProRes применяются названия proxy, lt, standard, hq."
+            tr(
+                "Скорость кодирования. Пустое поле — значение профиля. "
+                "Для ProRes применяются названия proxy, lt, standard, hq."
+            )
         )
-        form.addRow("Пресет скорости:", self._preset)
+        form.addRow(tr("Пресет скорости:"), self._preset)
 
         self._keyint = QSpinBox()
         self._keyint.setRange(0, 600)
-        self._keyint.setSpecialValueText("как в профиле")
+        self._keyint.setSpecialValueText(tr("как в профиле"))
         self._keyint.setValue(settings.keyint)
-        self._keyint.setToolTip("Интервал ключевых кадров. Меньше — точнее перемотка.")
-        form.addRow("Ключевые кадры:", self._keyint)
+        self._keyint.setToolTip(tr("Интервал ключевых кадров. Меньше — точнее перемотка."))
+        form.addRow(tr("Ключевые кадры:"), self._keyint)
 
         self._pix_fmt = QComboBox()
         self._pix_fmt.setEditable(True)
         self._pix_fmt.addItems(["", "yuv420p", "yuv422p", "yuv444p", "yuv422p10le", "bgr0"])
         self._pix_fmt.setCurrentText(settings.pix_fmt)
-        form.addRow("Формат пикселей:", self._pix_fmt)
+        form.addRow(tr("Формат пикселей:"), self._pix_fmt)
 
         # --- Звук ---
         self._audio_codec = QComboBox()
-        self._audio_codec.addItem("Как в профиле", "")
+        self._audio_codec.addItem(tr("Как в профиле"), "")
         for audio_codec in AudioCodec:
             self._audio_codec.addItem(audio_codec.encoder, audio_codec.value)
         index = self._audio_codec.findData(settings.audio_codec)
         self._audio_codec.setCurrentIndex(max(0, index))
-        form.addRow("Энкодер звука:", self._audio_codec)
+        form.addRow(tr("Энкодер звука:"), self._audio_codec)
 
         self._audio_bitrate = QLineEdit(settings.audio_bitrate)
-        self._audio_bitrate.setPlaceholderText("как в профиле, например 160k")
-        form.addRow("Битрейт звука:", self._audio_bitrate)
+        self._audio_bitrate.setPlaceholderText(tr("как в профиле, например 160k"))
+        form.addRow(tr("Битрейт звука:"), self._audio_bitrate)
 
         self._audio_rate = QSpinBox()
         self._audio_rate.setRange(0, 192000)
         self._audio_rate.setSingleStep(8000)
-        self._audio_rate.setSpecialValueText("как в профиле")
+        self._audio_rate.setSpecialValueText(tr("как в профиле"))
         self._audio_rate.setValue(settings.audio_sample_rate)
-        form.addRow("Частота дискретизации:", self._audio_rate)
+        form.addRow(tr("Частота дискретизации:"), self._audio_rate)
 
         self._audio_channels = QSpinBox()
         self._audio_channels.setRange(0, 8)
-        self._audio_channels.setSpecialValueText("как в профиле")
+        self._audio_channels.setSpecialValueText(tr("как в профиле"))
         self._audio_channels.setValue(settings.audio_channels)
-        form.addRow("Каналов звука:", self._audio_channels)
+        form.addRow(tr("Каналов звука:"), self._audio_channels)
 
         # --- Дополнительные аргументы и ручная команда ---
         self._extra_args = QLineEdit(settings.extra_args)
-        self._extra_args.setPlaceholderText("например -tune zerolatency -x264-params keyint=60")
+        self._extra_args.setPlaceholderText(tr("например -tune zerolatency -x264-params keyint=60"))
         self._extra_args.setToolTip(
-            "Добавляются в конец команды перед путём к файлу. "
-            "Разбираются по правилам оболочки."
+            tr(
+                "Добавляются в конец команды перед путём к файлу. "
+                "Разбираются по правилам оболочки."
+            )
         )
-        form.addRow("Дополнительные аргументы:", self._extra_args)
+        form.addRow(tr("Дополнительные аргументы:"), self._extra_args)
 
-        self._use_custom = QCheckBox("Использовать свою команду")
+        self._use_custom = QCheckBox(tr("Использовать свою команду"))
         self._use_custom.setChecked(settings.use_custom_command)
         self._use_custom.toggled.connect(self._update_custom_controls)
         self._use_custom.toggled.connect(self._refresh_encoding_info)
@@ -512,11 +539,13 @@ class SettingsDialog(QDialog):
         form.addRow(self._custom_command)
 
         hint = QLabel(
-            "Подстановки: {ffmpeg} — путь к кодировщику с общими флагами, "
-            "{video_input} — аргументы захвата экрана, {audio_input} — все "
-            "выбранные источники звука, {output} — путь к файлу, "
-            "{fps}, {width}, {height} — параметры захвата. "
-            "Остальные параметры этой вкладки при ручной команде не применяются."
+            tr(
+                "Подстановки: {ffmpeg} — путь к кодировщику с общими флагами, "
+                "{video_input} — аргументы захвата экрана, {audio_input} — все "
+                "выбранные источники звука, {output} — путь к файлу, "
+                "{fps}, {width}, {height} — параметры захвата. "
+                "Остальные параметры этой вкладки при ручной команде не применяются."
+            )
         )
         hint.setWordWrap(True)
         form.addRow(hint)
@@ -529,15 +558,15 @@ class SettingsDialog(QDialog):
         preview_font.setPointSize(8)
         self._preview.setFont(preview_font)
         self._preview.setToolTip(
-            "Команда, которая будет выполнена с учётом профиля и уточнений."
+            tr("Команда, которая будет выполнена с учётом профиля и уточнений.")
         )
-        form.addRow("Итоговая команда:", self._preview)
+        form.addRow(tr("Итоговая команда:"), self._preview)
 
         buttons = QHBoxLayout()
         buttons.setContentsMargins(0, 0, 0, 0)
-        fill = QPushButton("Подставить текущую команду")
+        fill = QPushButton(tr("Подставить текущую команду"))
         fill.clicked.connect(self._fill_command_template)
-        reset = QPushButton("Сбросить параметры кодирования")
+        reset = QPushButton(tr("Сбросить параметры кодирования"))
         reset.clicked.connect(self._reset_encoding)
         buttons.addWidget(fill)
         buttons.addWidget(reset)
@@ -630,51 +659,75 @@ class SettingsDialog(QDialog):
         if profile is None:
             identifier = str(self._profile.currentData())
             self._profile_title.setText(
-                f"<b>Профиль записи:</b> {self._profile.currentText()}<br>"
-                "Анимация собирается в несколько проходов: сначала запись без "
-                "потерь, затем сборка. Параметры ниже к ней не применяются."
+                tr(
+                    "<b>Профиль записи:</b> {0}<br>Анимация собирается в несколько проходов: "
+                    "сначала запись без потерь, затем сборка. Параметры ниже к ней не применяются."
+                ).format(self._profile.currentText())
             )
             self._preview.setPlainText(
-                "Для профиля анимации единой команды записи не существует: "
-                f"используется промежуточная запись и сборка формата {identifier}."
+                tr(
+                    "Для профиля анимации единой команды записи не существует: используется "
+                    "промежуточная запись и сборка формата {0}."
+                ).format(identifier)
             )
             return
 
         container = profile.container.value.upper()
         self._profile_title.setText(
-            f"<b>Профиль записи:</b> {profile.title}<br>"
-            f"Контейнер {container}, видео {profile.video_codec.encoder}, "
-            f"звук {profile.audio_codec.encoder}, "
-            f"качество CRF {profile.crf if profile.crf is not None else '—'}, "
-            f"пресет {profile.preset}, ключевые кадры {profile.keyint}"
+            tr(
+                "<b>Профиль записи:</b> {0}<br>Контейнер {1}, видео {2}, звук {3}, качество CRF "
+                "{4}, пресет {5}, ключевые кадры {6}"
+            ).format(
+                tr(profile.title),
+                container,
+                profile.video_codec.encoder,
+                profile.audio_codec.encoder,
+                profile.crf if profile.crf is not None else "—",
+                profile.preset,
+                profile.keyint,
+            )
         )
 
         # Подписи полей дополняются значениями профиля: пользователю видно,
         # что именно подразумевает вариант «как в профиле».
         pix_fmt = profile.pix_fmt or profile.video_codec.default_pix_fmt
-        self._video_codec.setItemText(0, f"Как в профиле ({profile.video_codec.encoder})")
-        self._audio_codec.setItemText(0, f"Как в профиле ({profile.audio_codec.encoder})")
+        self._video_codec.setItemText(
+            0, tr("Как в профиле ({0})").format(profile.video_codec.encoder)
+        )
+        self._audio_codec.setItemText(
+            0, tr("Как в профиле ({0})").format(profile.audio_codec.encoder)
+        )
         self._crf.setSpecialValueText(
-            f"как в профиле ({profile.crf if profile.crf is not None else 'не задан'})"
+            tr("как в профиле ({0})").format(
+                profile.crf if profile.crf is not None else tr("не задан")
+            )
         )
-        self._keyint.setSpecialValueText(f"как в профиле ({profile.keyint})")
-        self._audio_rate.setSpecialValueText(f"как в профиле ({profile.audio_sample_rate})")
-        self._audio_channels.setSpecialValueText(f"как в профиле ({profile.audio_channels})")
+        self._keyint.setSpecialValueText(tr("как в профиле ({0})").format(profile.keyint))
+        self._audio_rate.setSpecialValueText(
+            tr("как в профиле ({0})").format(profile.audio_sample_rate)
+        )
+        self._audio_channels.setSpecialValueText(
+            tr("как в профиле ({0})").format(profile.audio_channels)
+        )
         self._video_bitrate.setPlaceholderText(
-            f"как в профиле ({profile.video_bitrate or 'не задан'})"
+            tr("как в профиле ({0})").format(profile.video_bitrate or tr("не задан"))
         )
-        self._audio_bitrate.setPlaceholderText(f"как в профиле ({profile.audio_bitrate})")
+        self._audio_bitrate.setPlaceholderText(
+            tr("как в профиле ({0})").format(profile.audio_bitrate)
+        )
         line_edit = self._preset.lineEdit()
         if line_edit is not None:
-            line_edit.setPlaceholderText(f"как в профиле ({profile.preset})")
+            line_edit.setPlaceholderText(tr("как в профиле ({0})").format(profile.preset))
         pix_edit = self._pix_fmt.lineEdit()
         if pix_edit is not None:
-            pix_edit.setPlaceholderText(f"как в профиле ({pix_fmt})")
+            pix_edit.setPlaceholderText(tr("как в профиле ({0})").format(pix_fmt))
 
         if self._use_custom.isChecked():
             self._preview.setPlainText(
-                "Используется собственная команда из поля выше; "
-                "параметры этой вкладки не применяются."
+                tr(
+                    "Используется собственная команда из поля выше; "
+                    "параметры этой вкладки не применяются."
+                )
             )
             return
 
@@ -683,9 +736,8 @@ class SettingsDialog(QDialog):
         resolved = self._profiles.resolve(adjusted)
         note = ""
         if resolved.video_codec is not adjusted.video_codec:
-            note = (
-                f"\n\nЭнкодер {adjusted.video_codec.encoder} отсутствует в сборке "
-                f"и будет заменён на {resolved.video_codec.encoder}."
+            note = tr("\n\nЭнкодер {0} отсутствует в сборке и будет заменён на {1}.").format(
+                adjusted.video_codec.encoder, resolved.video_codec.encoder
             )
         self._preview.setPlainText(
             self._profiles.build_command_template(resolved, mode, sources) + note
@@ -728,8 +780,10 @@ class SettingsDialog(QDialog):
             # Анимация собирается в несколько проходов, и единой команды
             # записи для неё не существует.
             self._custom_command.setPlainText(
-                "# Для анимаций ручная команда не применяется: "
-                "запись ведётся профилем без потерь с последующей сборкой."
+                tr(
+                    "# Для анимаций ручная команда не применяется: "
+                    "запись ведётся профилем без потерь с последующей сборкой."
+                )
             )
             return
 
@@ -769,11 +823,11 @@ class SettingsDialog(QDialog):
         form = QFormLayout(page)
 
         titles = {
-            "screenshot_region": "Снимок области:",
-            "screenshot_fullscreen": "Снимок всего экрана:",
-            "screenshot_window": "Снимок активного окна:",
-            "record_toggle": "Запись области (старт и стоп):",
-            "record_toggle_pause": "Пауза записи:",
+            "screenshot_region": tr("Снимок области:"),
+            "screenshot_fullscreen": tr("Снимок всего экрана:"),
+            "screenshot_window": tr("Снимок активного окна:"),
+            "record_toggle": tr("Запись области (старт и стоп):"),
+            "record_toggle_pause": tr("Пауза записи:"),
         }
         self._hotkey_fields: dict[str, HotkeyEdit] = {}
         for name, title in titles.items():
@@ -785,8 +839,10 @@ class SettingsDialog(QDialog):
             # В сессии Wayland перехват возможен только через портал,
             # о чём пользователя следует предупредить сразу.
             warning = QLabel(
-                "Сессия Wayland: глобальные клавиши требуют портала "
-                "GlobalShortcuts. Действия доступны через меню трея."
+                tr(
+                    "Сессия Wayland: глобальные клавиши требуют портала "
+                    "GlobalShortcuts. Действия доступны через меню трея."
+                )
             )
             warning.setWordWrap(True)
             form.addRow(warning)
@@ -845,6 +901,7 @@ class SettingsDialog(QDialog):
         settings.general.show_notifications = self._notifications.isChecked()
         settings.general.hide_while_recording = self._hide_while_recording.isChecked()
         settings.general.capture_delay_ms = self._delay.value()
+        settings.general.language = str(self._language.currentData() or "ru")
 
         settings.images.image_format = str(self._image_format.currentData())
         settings.images.png_compression = self._png_compression.value()

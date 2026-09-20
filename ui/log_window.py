@@ -8,6 +8,8 @@
 
 from __future__ import annotations
 
+from core.i18n import tr
+
 from PySide6.QtGui import QFont, QGuiApplication
 from PySide6.QtWidgets import (
     QDialog,
@@ -23,7 +25,7 @@ class LogWindow(QDialog):
 
     def __init__(self, lines: list[str], parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self.setWindowTitle("Журнал LinScreen")
+        self.setWindowTitle(tr("Журнал LinScreen"))
         self.resize(900, 520)
 
         self._view = QPlainTextEdit()
@@ -37,8 +39,8 @@ class LogWindow(QDialog):
         self._scroll_to_end()
 
         buttons = QDialogButtonBox()
-        copy_button = buttons.addButton("Копировать", QDialogButtonBox.ButtonRole.ActionRole)
-        close_button = buttons.addButton("Закрыть", QDialogButtonBox.ButtonRole.RejectRole)
+        copy_button = buttons.addButton(tr("Копировать"), QDialogButtonBox.ButtonRole.ActionRole)
+        close_button = buttons.addButton(tr("Закрыть"), QDialogButtonBox.ButtonRole.RejectRole)
         copy_button.clicked.connect(self._copy)
         close_button.clicked.connect(self.reject)
 

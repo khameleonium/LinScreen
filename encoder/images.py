@@ -8,6 +8,8 @@
 
 from __future__ import annotations
 
+from core.i18n import tr
+
 from pathlib import Path
 
 from PySide6.QtCore import QBuffer, QByteArray, QIODevice
@@ -91,15 +93,13 @@ def _save_with_qt(image: QImage, path: Path, image_format: str, settings: ImageS
         writer.setQuality(quality)
 
     if not writer.write(image):
-        raise ImageSaveError(writer.errorString() or "Не удалось записать файл")
+        raise ImageSaveError(writer.errorString() or tr("Не удалось записать файл"))
 
 
 def _save_avif(image: QImage, path: Path, settings: ImageSettings) -> None:
     """Сохранение в формате AVIF средствами Pillow."""
     if not is_avif_available():
-        raise ImageSaveError(
-            "Поддержка AVIF недоступна: требуется пакет pillow-avif-plugin"
-        )
+        raise ImageSaveError(tr("Поддержка AVIF недоступна: требуется пакет pillow-avif-plugin"))
     picture = qimage_to_pillow(image)
     # Прозрачность сохраняется: формат поддерживает альфа-канал.
     picture.save(path, format="AVIF", quality=max(1, min(100, settings.avif_quality)))
@@ -113,7 +113,7 @@ def save_image(image: QImage, path: Path, settings: ImageSettings) -> Path:
     сохранённого файла.
     """
     if image.isNull():
-        raise ImageSaveError("Пустое изображение сохранению не подлежит")
+        raise ImageSaveError(tr("Пустое изображение сохранению не подлежит"))
 
     path.parent.mkdir(parents=True, exist_ok=True)
     image_format = settings.image_format.lower()
@@ -124,7 +124,7 @@ def save_image(image: QImage, path: Path, settings: ImageSettings) -> Path:
         _save_with_qt(image, path, image_format, settings)
 
     if not path.is_file():
-        raise ImageSaveError("Файл не был создан")
+        raise ImageSaveError(tr("Файл не был создан"))
     return path
 
 
@@ -136,7 +136,7 @@ def image_to_png_bytes(image: QImage) -> bytes:
     try:
         # Подпись метода в стабах PySide6 не описывает запись в QIODevice.
         if not image.save(buffer, "PNG"):  # type: ignore[call-overload]
-            raise ImageSaveError("Не удалось закодировать изображение")
+            raise ImageSaveError(tr("Не удалось закодировать изображение"))
     finally:
         buffer.close()
     return bytes(payload.data())

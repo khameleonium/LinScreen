@@ -12,6 +12,8 @@
 
 from __future__ import annotations
 
+from core.i18n import tr
+
 import os
 import shutil
 from dataclasses import dataclass, field
@@ -20,15 +22,15 @@ from enum import Enum
 # Утилиты, наличие которых проверяется при старте. Отсутствие любой из них
 # не является ошибкой: приложение переключается на доступный способ работы.
 OPTIONAL_TOOLS: tuple[str, ...] = (
-    "ffmpeg",      # кодирование и захват
-    "pactl",       # перечисление звуковых устройств PulseAudio и PipeWire
-    "grim",        # снимок экрана в композиторах на базе wlroots
-    "slurp",       # выделение области в композиторах на базе wlroots
-    "scrot",       # снимок экрана в X11
-    "maim",        # альтернативный снимок экрана в X11
-    "xdotool",     # сведения об активном окне в X11
-    "wl-copy",     # буфер обмена в Wayland
-    "xclip",       # буфер обмена в X11
+    "ffmpeg",  # кодирование и захват
+    "pactl",  # перечисление звуковых устройств PulseAudio и PipeWire
+    "grim",  # снимок экрана в композиторах на базе wlroots
+    "slurp",  # выделение области в композиторах на базе wlroots
+    "scrot",  # снимок экрана в X11
+    "maim",  # альтернативный снимок экрана в X11
+    "xdotool",  # сведения об активном окне в X11
+    "wl-copy",  # буфер обмена в Wayland
+    "xclip",  # буфер обмена в X11
     "notify-send",  # уведомления рабочего стола
 )
 
@@ -46,7 +48,7 @@ class SessionType(str, Enum):
         return {
             SessionType.X11: "X11",
             SessionType.WAYLAND: "Wayland",
-            SessionType.UNKNOWN: "Не определён",
+            SessionType.UNKNOWN: tr("Не определён"),
         }[self]
 
 

@@ -13,6 +13,8 @@
 
 from __future__ import annotations
 
+from core.i18n import tr
+
 from PySide6.QtCore import QObject, Signal
 
 from core.session import DesktopSession
@@ -144,9 +146,7 @@ def shifted_keysyms(key: str) -> list[int]:
             return []
         # Нечётные уровни таблицы соответствуют нажатому Shift в каждой
         # из групп раскладок.
-        found = {
-            connection.keycode_to_keysym(keycode, level) for level in (1, 3, 5, 7)
-        }
+        found = {connection.keycode_to_keysym(keycode, level) for level in (1, 3, 5, 7)}
         return sorted(value for value in found if value and value != base)
     except Exception:  # noqa: BLE001 - любая ошибка означает отсутствие поправки
         return []
@@ -226,8 +226,10 @@ class HotkeyManager(QObject):
             # Портал GlobalShortcuts подключается отдельным бэкендом;
             # до его появления пользователь работает через меню трея.
             self.unavailable.emit(
-                "Глобальные клавиши в сессии Wayland требуют портала "
-                "GlobalShortcuts. Действия доступны через меню в трее."
+                tr(
+                    "Глобальные клавиши в сессии Wayland требуют портала "
+                    "GlobalShortcuts. Действия доступны через меню в трее."
+                )
             )
 
     def stop(self) -> None:
@@ -245,7 +247,7 @@ class HotkeyManager(QObject):
             from pynput import keyboard
         except ImportError:
             self.unavailable.emit(
-                "Библиотека pynput не установлена: глобальные клавиши отключены."
+                tr("Библиотека pynput не установлена: глобальные клавиши отключены.")
             )
             return
 
@@ -265,7 +267,7 @@ class HotkeyManager(QObject):
             listener.daemon = True
             listener.start()
         except Exception as error:  # noqa: BLE001 - причина уходит в интерфейс
-            self.unavailable.emit(f"Не удалось зарегистрировать клавиши: {error}")
+            self.unavailable.emit(tr("Не удалось зарегистрировать клавиши: {0}").format(error))
             return
         self._listener = listener
 

@@ -58,11 +58,17 @@ excluded_other = [
     "numpy", "scipy", "matplotlib", "IPython", "pydoc_data",
 ]
 
+# Словари перевода: каталог целиком вкладывается рядом с приложением.
+datas = []
+locale_dir = PROJECT / "locale"
+if locale_dir.is_dir():
+    datas.append((str(locale_dir), "locale"))
+
 analysis = Analysis(
     ["main.py"],
     pathex=[str(PROJECT)],
     binaries=binaries,
-    datas=[],
+    datas=datas,
     # Модуль подключается Pillow во время работы и не виден статическому
     # анализу импортов, поэтому указывается явно.
     hiddenimports=["pillow_avif"],

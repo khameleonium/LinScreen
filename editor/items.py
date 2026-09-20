@@ -71,8 +71,10 @@ class ArrowItem(QGraphicsItem):
     def boundingRect(self) -> QRectF:  # noqa: N802 - имя определено Qt
         """Охватывающий прямоугольник с запасом под наконечник и перо."""
         margin = max(ARROW_HEAD_MAX, self._width * 2)
-        return QRectF(self._line.p1(), self._line.p2()).normalized().adjusted(
-            -margin, -margin, margin, margin
+        return (
+            QRectF(self._line.p1(), self._line.p2())
+            .normalized()
+            .adjusted(-margin, -margin, margin, margin)
         )
 
     def paint(
@@ -212,8 +214,8 @@ class LabelItem(QGraphicsTextItem):
         self.setDefaultTextColor(color)
         # Подложка подбирается по яркости текста: светлый текст получает
         # тёмную основу и наоборот.
-        self._background = QColor(0, 0, 0, 160) if color.lightness() > 110 else QColor(
-            255, 255, 255, 190
+        self._background = (
+            QColor(0, 0, 0, 160) if color.lightness() > 110 else QColor(255, 255, 255, 190)
         )
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, True)
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable, True)
@@ -229,8 +231,10 @@ class LabelItem(QGraphicsTextItem):
 
     def boundingRect(self) -> QRectF:  # noqa: N802 - имя определено Qt
         """Границы с учётом подложки."""
-        return super().boundingRect().adjusted(
-            -self.PADDING, -self.PADDING, self.PADDING, self.PADDING
+        return (
+            super()
+            .boundingRect()
+            .adjusted(-self.PADDING, -self.PADDING, self.PADDING, self.PADDING)
         )
 
     def paint(

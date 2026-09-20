@@ -9,6 +9,8 @@
 
 from __future__ import annotations
 
+from core.i18n import set_language, tr
+
 from pathlib import Path
 
 import os
@@ -67,7 +69,6 @@ from ui.settings import SettingsDialog
 from ui.log_window import LogWindow
 from ui.tray import TrayIcon
 
-
 # Предельный размер файла журнала. Приложение работает сутками, и
 # неограниченный файл со временем занял бы заметное место.
 LOG_FILE_LIMIT = 1024 * 1024
@@ -91,6 +92,9 @@ class LinScreenApplication(QObject):
         self._session = detect_session()
         self._config = ConfigManager()
         self._config.load()
+        # Язык выбирается до создания любых окон: строки интерфейса
+        # переводятся в момент их создания.
+        set_language(self._config.settings.general.language)
 
         self._ffmpeg_path = self._resolve_ffmpeg()
         self._profiles = VideoProfileManager(ffmpeg_path=self._ffmpeg_path or "ffmpeg")
@@ -139,15 +143,15 @@ class LinScreenApplication(QObject):
             self._probe.start(self._ffmpeg_path)
         else:
             self._notify(
-                "FFmpeg не найден",
-                "Запись экрана недоступна. Требуется установить пакет ffmpeg.",
+                tr("FFmpeg не найден"),
+                tr("Запись экрана недоступна. Требуется установить пакет ffmpeg."),
                 is_error=True,
             )
 
         if not self._session.is_x11:
             self._notify(
-                "Сессия Wayland",
-                "Доступны снимки экрана. Запись требует портала ScreenCast.",
+                tr("Сессия Wayland"),
+                tr("Доступны снимки экрана. Запись требует портала ScreenCast."),
             )
 
     def _resolve_ffmpeg(self) -> str:
@@ -190,21 +194,17 @@ class LinScreenApplication(QObject):
         self._recorder.elapsedChanged.connect(self._on_elapsed)
         self._recorder.finished.connect(self._on_recording_finished)
         self._recorder.failed.connect(self._on_recording_failed)
-        self._recorder.warning.connect(lambda text: self._notify("Запись", text))
+        self._recorder.warning.connect(lambda text: self._notify(tr("Запись"), text))
         self._recorder.log.connect(self._append_log)
 
         self._recorder_bar.pauseRequested.connect(self.toggle_pause)
         self._recorder_bar.stopRequested.connect(self.stop_recording)
 
         self._hotkeys.activated.connect(self._on_hotkey)
-        self._hotkeys.unavailable.connect(
-            lambda text: self._notify("Горячие клавиши", text)
-        )
+        self._hotkeys.unavailable.connect(lambda text: self._notify(tr("Горячие клавиши"), text))
 
         self._probe.ready.connect(self._on_capabilities)
-        self._probe.failed.connect(
-            lambda text: self._notify("FFmpeg", text, is_error=True)
-        )
+        self._probe.failed.connect(lambda text: self._notify("FFmpeg", text, is_error=True))
 
     def _apply_hotkeys(self) -> None:
         """Перерегистрация глобальных клавиш по текущим настройкам."""
@@ -221,7 +221,7 @@ class LinScreenApplication(QObject):
         self._profiles.set_available_encoders(encoders)
         problems = capabilities.missing_essentials()  # type: ignore[attr-defined]
         if problems:
-            self._notify("Ограничения сборки FFmpeg", problems[0])
+            self._notify(tr("Ограничения сборки FFmpeg"), problems[0])
 
     # ----------------------------------------------------------- снимки
 
@@ -258,7 +258,7 @@ class LinScreenApplication(QObject):
             try:
                 on_ready(grab_virtual_desktop())
             except CaptureBackendError as error:
-                self._notify("Снимок экрана", str(error), is_error=True)
+                self._notify(tr("Снимок экрана"), str(error), is_error=True)
             return
 
         if is_screenshot_available():
@@ -277,19 +277,18 @@ class LinScreenApplication(QObject):
             try:
                 on_ready(grab_with_grim())
             except CaptureBackendError as error:
-                self._notify("Снимок экрана", str(error), is_error=True)
+                self._notify(tr("Снимок экрана"), str(error), is_error=True)
             return
 
         self._notify(
-            "Снимок экрана",
-            "Нет доступного способа съёмки: требуется портал снимков "
-            "либо утилита grim.",
+            tr("Снимок экрана"),
+            tr("Нет доступного способа съёмки: требуется портал снимков " "либо утилита grim."),
             is_error=True,
         )
 
     def _on_portal_failed(self, text: str) -> None:
         """Сообщение об отказе портала снимков."""
-        self._notify("Снимок экрана", text, is_error=True)
+        self._notify(tr("Снимок экрана"), text, is_error=True)
         self._release_portal()
 
     def _release_portal(self) -> None:
@@ -305,7 +304,7 @@ class LinScreenApplication(QObject):
         if mode is CaptureMode.REGION:
             self._select_region(
                 desktop,
-                "Выделите область для снимка: ЛКМ — выбор, Esc — отмена",
+                tr("Выделите область для снимка: ЛКМ — выбор, Esc — отмена"),
                 lambda rect: self._finish_screenshot(crop_desktop_image(desktop, rect)),
             )
             return
@@ -319,9 +318,7 @@ class LinScreenApplication(QObject):
         # Режим полного экрана возвращает снимок без обрезки.
         self._finish_screenshot(desktop)
 
-    def _select_region(
-        self, desktop: QImage, hint: str, handler: Callable[[QRect], None]
-    ) -> None:
+    def _select_region(self, desktop: QImage, hint: str, handler: Callable[[QRect], None]) -> None:
         """Показ оверлея выделения области поверх замороженного снимка."""
         overlay = RegionOverlay(desktop, virtual_geometry(), hint)
         overlay.selected.connect(handler)
@@ -333,7 +330,7 @@ class LinScreenApplication(QObject):
     def _finish_screenshot(self, image: QImage) -> None:
         """Обработка готового снимка согласно настройкам."""
         if image.isNull():
-            self._notify("Снимок экрана", "Получено пустое изображение", is_error=True)
+            self._notify(tr("Снимок экрана"), tr("Получено пустое изображение"), is_error=True)
             return
 
         if self._config.settings.general.copy_to_clipboard:
@@ -366,7 +363,7 @@ class LinScreenApplication(QObject):
     def _copy_image(self, image: QImage) -> None:
         """Копирование изображения в буфер обмена."""
         copy_image_to_clipboard(image)
-        self._notify("Буфер обмена", "Изображение скопировано")
+        self._notify(tr("Буфер обмена"), tr("Изображение скопировано"))
 
     def _save_image(self, image: QImage) -> None:
         """Сохранение снимка в настроенный каталог."""
@@ -383,9 +380,9 @@ class LinScreenApplication(QObject):
         suggested = self._config.build_image_path(extension_for(settings.image_format))
         chosen, _filter = QFileDialog.getSaveFileName(
             None,
-            "Сохранить снимок",
+            tr("Сохранить снимок"),
             str(suggested),
-            "Изображения (*.png *.jpg *.jpeg *.webp *.avif *.bmp)",
+            tr("Изображения (*.png *.jpg *.jpeg *.webp *.avif *.bmp)"),
         )
         if not chosen:
             return
@@ -404,8 +401,8 @@ class LinScreenApplication(QObject):
         run_async(
             self,
             save_image,
-            lambda result: self._notify("Снимок сохранён", str(result)),
-            lambda text: self._notify("Снимок экрана", text, is_error=True),
+            lambda result: self._notify(tr("Снимок сохранён"), str(result)),
+            lambda text: self._notify(tr("Снимок экрана"), text, is_error=True),
             image,
             path,
             settings,
@@ -416,10 +413,10 @@ class LinScreenApplication(QObject):
     def start_recording(self, mode: object) -> None:
         """Запуск записи экрана в выбранном режиме."""
         if self._recorder.state.is_busy:
-            self._notify("Запись", "Запись уже выполняется")
+            self._notify(tr("Запись"), tr("Запись уже выполняется"))
             return
         if not self._ffmpeg_path:
-            self._notify("Запись", "FFmpeg не найден", is_error=True)
+            self._notify(tr("Запись"), tr("FFmpeg не найден"), is_error=True)
             return
 
         if not self._session.is_x11:
@@ -433,7 +430,7 @@ class LinScreenApplication(QObject):
             self._grab_desktop_async(
                 lambda desktop: self._select_region(
                     desktop,
-                    "Выделите область для записи: ЛКМ — выбор, Esc — отмена",
+                    tr("Выделите область для записи: ЛКМ — выбор, Esc — отмена"),
                     self._prepare_recording,
                 )
             )
@@ -453,9 +450,11 @@ class LinScreenApplication(QObject):
         has_filter = getattr(capabilities, "can_capture_pipewire", True)
         if not has_filter:
             self._notify(
-                "Запись",
-                "Установленная сборка FFmpeg не содержит фильтра pipewiregrab. "
-                "Запись в Wayland требует FFmpeg версии 7.1 или новее.",
+                tr("Запись"),
+                tr(
+                    "Установленная сборка FFmpeg не содержит фильтра pipewiregrab. "
+                    "Запись в Wayland требует FFmpeg версии 7.1 или новее."
+                ),
                 is_error=True,
             )
             return
@@ -469,7 +468,7 @@ class LinScreenApplication(QObject):
 
     def _on_screencast_failed(self, text: str) -> None:
         """Сообщение об отказе портала захвата."""
-        self._notify("Запись", text, is_error=True)
+        self._notify(tr("Запись"), text, is_error=True)
         self._release_screencast()
 
     def _release_screencast(self) -> None:
@@ -481,10 +480,10 @@ class LinScreenApplication(QObject):
     def record_monitor(self, index: int) -> None:
         """Запись отдельного монитора по его порядковому номеру."""
         if self._recorder.state.is_busy:
-            self._notify("Запись", "Запись уже выполняется")
+            self._notify(tr("Запись"), tr("Запись уже выполняется"))
             return
         if not self._ffmpeg_path:
-            self._notify("Запись", "FFmpeg не найден", is_error=True)
+            self._notify(tr("Запись"), tr("FFmpeg не найден"), is_error=True)
             return
         if not self._session.is_x11:
             # В Wayland выбор монитора выполняет сам портал.
@@ -536,7 +535,7 @@ class LinScreenApplication(QObject):
                     show_cursor=settings.show_cursor,
                 )
         except CaptureBackendError as error:
-            self._notify("Запись", str(error), is_error=True)
+            self._notify(tr("Запись"), str(error), is_error=True)
             return
 
         audio_inputs = resolve_audio_inputs(
@@ -565,15 +564,15 @@ class LinScreenApplication(QObject):
             self._recorder.start(job)
         except RuntimeError as error:
             self._restore_windows()
-            self._notify("Запись", str(error), is_error=True)
+            self._notify(tr("Запись"), str(error), is_error=True)
             return
 
         if self._config.settings.general.hide_while_recording:
             # Панель управления записью скрыта, поэтому способ остановки
             # сообщается уведомлением.
             stop_key = self._config.settings.hotkeys.record_toggle
-            hint = f"клавиша {stop_key}" if stop_key else "меню значка в трее"
-            self._notify("Запись начата", f"Остановка: {hint}")
+            hint = tr("клавиша {0}").format(stop_key) if stop_key else tr("меню значка в трее")
+            self._notify(tr("Запись начата"), tr("Остановка: {0}").format(hint))
             return
         self._recorder_bar.show_at_corner()
 
@@ -697,7 +696,9 @@ class LinScreenApplication(QObject):
         try:
             profile = self._profiles.video_profile(identifier)
         except KeyError:
-            self._notify("Запись", f"Неизвестный профиль: {identifier}", is_error=True)
+            self._notify(
+                tr("Запись"), tr("Неизвестный профиль: {0}").format(identifier), is_error=True
+            )
             return None
 
         # Уточнения применяются поверх профиля: кодек, качество, пресет
@@ -714,14 +715,12 @@ class LinScreenApplication(QObject):
                     encoding.custom_command, video_input, output, audio_inputs
                 )
             except ValueError as error:
-                self._notify("Запись", f"Ошибка в команде: {error}", is_error=True)
+                self._notify(tr("Запись"), tr("Ошибка в команде: {0}").format(error), is_error=True)
                 return None
 
         return RecordingJob(
             output_path=output,
-            make_step=self._make_record_step(
-                profile, video_input, audio_inputs, audio_mode
-            ),
+            make_step=self._make_record_step(profile, video_input, audio_inputs, audio_mode),
             ffmpeg_path=self._ffmpeg_path,
             # Фрагменты пишутся тем же контейнером, что и результат: склейка
             # копированием потоков возможна только при совпадении форматов.
@@ -739,7 +738,7 @@ class LinScreenApplication(QObject):
         # Выбор сохраняется сразу: следующий запуск приложения должен
         # начинаться с того же источника.
         self._config.save()
-        self._notify("Источник звука", mode.label)
+        self._notify(tr("Источник звука"), mode.label)
 
     def toggle_recording(self) -> None:
         """
@@ -758,7 +757,7 @@ class LinScreenApplication(QObject):
             return
         if self._recorder.state is RecorderState.PROCESSING:
             # Предыдущая запись ещё собирается: новая начнётся после неё.
-            self._notify("Запись", "Идёт обработка предыдущей записи")
+            self._notify(tr("Запись"), tr("Идёт обработка предыдущей записи"))
             return
         self.start_recording(CaptureMode.REGION)
 
@@ -796,14 +795,14 @@ class LinScreenApplication(QObject):
     def _on_recording_finished(self, path: object) -> None:
         """Оповещение об успешном завершении записи."""
         self._release_screencast()
-        self._notify("Запись сохранена", str(path))
+        self._notify(tr("Запись сохранена"), str(path))
         if self._quit_after_recording:
             self.quit()
 
     def _on_recording_failed(self, message: str) -> None:
         """Оповещение о сбое записи."""
         self._release_screencast()
-        self._notify("Ошибка записи", message, is_error=True)
+        self._notify(tr("Ошибка записи"), message, is_error=True)
         if self._quit_after_recording:
             self.quit()
 
@@ -888,14 +887,16 @@ class LinScreenApplication(QObject):
     def _diagnostics_text(self) -> str:
         """Краткие сведения о сборке FFmpeg для окна настроек."""
         if not self._ffmpeg_path:
-            return "FFmpeg не найден: запись недоступна."
+            return tr("FFmpeg не найден: запись недоступна.")
         version = getattr(self._capabilities, "version", "")
-        text = f"FFmpeg: {self._ffmpeg_path}" + (f", версия {version}" if version else "")
+        text = f"FFmpeg: {self._ffmpeg_path}" + (
+            tr(", версия {0}").format(version) if version else ""
+        )
         problems = []
         if self._capabilities is not None:
             problems = self._capabilities.missing_essentials()  # type: ignore[attr-defined]
         if not is_avif_available():
-            problems.append("Формат AVIF недоступен: не установлен pillow-avif-plugin.")
+            problems.append(tr("Формат AVIF недоступен: не установлен pillow-avif-plugin."))
         return text + ("\n" + "\n".join(problems) if problems else "")
 
     def open_settings(self) -> None:
@@ -926,8 +927,12 @@ class LinScreenApplication(QObject):
         if self._ffmpeg_path:
             self._probe.start(self._ffmpeg_path)
         self._apply_hotkeys()
+        # Язык мог измениться: меню значка собирается заново, прочие окна
+        # создаются при открытии и получат новый язык сами.
+        set_language(self._config.settings.general.language)
+        self._tray.rebuild_menu()
         self._tray.set_audio_mode(self._audio_mode())
-        self._notify("Настройки", "Изменения сохранены")
+        self._notify(tr("Настройки"), tr("Изменения сохранены"))
 
     def open_images_folder(self) -> None:
         """Открытие каталога снимков в файловом менеджере."""
@@ -944,7 +949,7 @@ class LinScreenApplication(QObject):
             # не создаётся, а открыть его пользователь вправе и раньше.
             directory.mkdir(parents=True, exist_ok=True)
         except OSError as error:
-            self._notify("Открытие папки", str(error), is_error=True)
+            self._notify(tr("Открытие папки"), str(error), is_error=True)
             return
         QDesktopServices.openUrl(QUrl.fromLocalFile(str(directory)))
 
@@ -954,7 +959,7 @@ class LinScreenApplication(QObject):
             # Незавершённая запись сначала корректно останавливается,
             # иначе файл останется без финализированного заголовка.
             self._quit_after_recording = True
-            self._notify("Выход", "Завершение записи перед выходом…")
+            self._notify(tr("Выход"), tr("Завершение записи перед выходом…"))
             self._recorder.stop()
             return
 
@@ -978,7 +983,7 @@ class LinScreenApplication(QObject):
         отключение всплывающих окон не лишает пользователя сведений о
         происходящем: их видно в окне журнала и в файле.
         """
-        mark = "ОШИБКА" if is_error else "Сообщение"
+        mark = tr("ОШИБКА") if is_error else tr("Сообщение")
         self._append_log(f"{mark}: {title}: {message}")
         if self._config.settings.general.show_notifications:
             self._tray.notify(title, message, is_error)

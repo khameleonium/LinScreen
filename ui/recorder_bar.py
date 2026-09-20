@@ -8,6 +8,8 @@
 
 from __future__ import annotations
 
+from core.i18n import tr
+
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor, QGuiApplication, QPainter, QPaintEvent
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QWidget
@@ -55,11 +57,11 @@ class RecorderBar(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
         self.setStyleSheet(_STYLE)
 
-        self._state_label = QLabel("Идёт запись")
+        self._state_label = QLabel(tr("Идёт запись"))
         self._timer_label = QLabel("00:00:00")
         self._timer_label.setObjectName("timer")
-        self._pause_button = QPushButton("Пауза")
-        self._stop_button = QPushButton("Стоп")
+        self._pause_button = QPushButton(tr("Пауза"))
+        self._stop_button = QPushButton(tr("Стоп"))
         self._stop_button.setObjectName("stop")
 
         layout = QHBoxLayout(self)
@@ -104,7 +106,7 @@ class RecorderBar(QWidget):
         self._state_label.setText(state.label)
         # На паузе кнопка предлагает продолжить запись.
         self._pause_button.setText(
-            "Продолжить" if state is RecorderState.PAUSED else "Пауза"
+            tr("Продолжить") if state is RecorderState.PAUSED else tr("Пауза")
         )
         busy = state in (RecorderState.STOPPING, RecorderState.PROCESSING)
         self._pause_button.setEnabled(not busy)
