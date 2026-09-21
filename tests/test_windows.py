@@ -6,7 +6,14 @@ import unittest
 
 from PySide6.QtCore import QPoint, QRect
 
-from capture.windows import ICONIC_STATE, InterfaceObject, _Atoms, _is_hidden, object_at
+from capture.windows import (
+    ICONIC_STATE,
+    InterfaceObject,
+    _Atoms,
+    _build_hidden_sets,
+    _is_hidden,
+    object_at,
+)
 
 
 def make(x: int, y: int, width: int, height: int, depth: int = 0) -> InterfaceObject:
@@ -59,8 +66,15 @@ class ObjectSearchTest(unittest.TestCase):
 class FakeProperty:
     """Ответ X-сервера на запрос свойства окна."""
 
-    def __init__(self, value: list[int]) -> None:
+    def __init__(self, value: list[int] | bytes | str) -> None:
         self.value = value
+
+
+class FakeAttributes:
+    """Атрибуты окна X11."""
+
+    def __init__(self, map_state: int = 2) -> None:
+        self.map_state = map_state
 
 
 class FakeWindow:
@@ -68,15 +82,27 @@ class FakeWindow:
 
     def __init__(
         self,
+        id: int = 0,
         wm_state: int | None = None,
         net_state: list[int] | None = None,
         desktop: int | None = None,
+        window_type: list[int] | None = None,
+        wm_name: bytes | str | None = None,
+        transient_for: int | None = None,
+        map_state: int = 2,
         children: list["FakeWindow"] | None = None,
+        parent: "FakeWindow | None" = None,
     ) -> None:
+        self.id = id
         self._wm_state = wm_state
         self._net_state = net_state
         self._desktop = desktop
+        self._window_type = window_type
+        self._wm_name = wm_name
+        self._transient_for = transient_for
+        self._map_state = map_state
         self._children = children or []
+        self._parent = parent
 
     def get_property(
         self, kind: int, _type: int, _offset: int, _length: int
@@ -84,6 +110,8 @@ class FakeWindow:
         """Значение свойства состояния по соглашению ICCCM."""
         if kind == ATOMS.wm_state and self._wm_state is not None:
             return FakeProperty([self._wm_state, 0])
+        if ATOMS.wm_name and kind == ATOMS.wm_name and self._wm_name is not None:
+            return FakeProperty(self._wm_name)
         return None
 
     def get_full_property(self, kind: int, _type: int) -> FakeProperty | None:
@@ -92,17 +120,60 @@ class FakeWindow:
             return FakeProperty(self._net_state)
         if kind == ATOMS_WITH_DESKTOP.net_desktop and self._desktop is not None:
             return FakeProperty([self._desktop])
+        if (
+            ATOMS.net_window_type
+            and kind == ATOMS.net_window_type
+            and self._window_type is not None
+        ):
+            return FakeProperty(self._window_type)
+        if (
+            ATOMS.wm_transient_for
+            and kind == ATOMS.wm_transient_for
+            and self._transient_for is not None
+        ):
+            return FakeProperty([self._transient_for])
+        if (
+            ATOMS.net_client_list
+            and kind == ATOMS.net_client_list
+            and self._children
+        ):
+            return FakeProperty([c.id for c in self._children])
         return None
 
+    def get_attributes(self) -> FakeAttributes:
+        """Атрибуты отображения окна."""
+        return FakeAttributes(self._map_state)
+
     def query_tree(self) -> object:
-        """Потомки окна."""
-        return type("Tree", (), {"children": self._children})()
+        """Потомки и родитель окна."""
+        return type("Tree", (), {"children": self._children, "parent": self._parent})()
 
 
-ATOMS = _Atoms(wm_state=1, net_state=2, hidden=3, any_property=0)
-ATOMS_WITH_DESKTOP = _Atoms(
-    wm_state=1, net_state=2, hidden=3, any_property=0, net_desktop=4
+class FakeConnection:
+    """Имитация соединения с X-сервером."""
+
+    def __init__(self, windows: dict[int, FakeWindow]) -> None:
+        self._windows = windows
+
+    def create_resource_object(self, _rtype: str, xid: int) -> FakeWindow:
+        if xid in self._windows:
+            return self._windows[xid]
+        raise ValueError(f"Window {xid} not found")
+
+
+ATOMS = _Atoms(
+    wm_state=1,
+    net_state=2,
+    hidden=3,
+    any_property=0,
+    net_desktop=4,
+    net_client_list=5,
+    net_window_type=6,
+    net_window_type_desktop=7,
+    wm_transient_for=8,
+    wm_name=9,
 )
+ATOMS_WITH_DESKTOP = ATOMS
 
 
 class HiddenWindowTest(unittest.TestCase):
@@ -185,6 +256,80 @@ class HiddenWindowTest(unittest.TestCase):
         self.assertTrue(
             _is_hidden(frame, ATOMS_WITH_DESKTOP, current_desktop=0)
         )
+
+    def test_build_hidden_sets_identifies_hidden_clients_and_frames(self) -> None:
+        """Сбор скрытых клиентов и их внешних рамок из _NET_CLIENT_LIST."""
+        root = FakeWindow(id=1)
+        frame_iconic = FakeWindow(id=10, parent=root)
+        client_iconic = FakeWindow(
+            id=100, wm_state=ICONIC_STATE, parent=frame_iconic
+        )
+        frame_iconic._children = [client_iconic]
+
+        frame_normal = FakeWindow(id=20, parent=root)
+        client_normal = FakeWindow(
+            id=200, wm_state=1, parent=frame_normal
+        )
+        frame_normal._children = [client_normal]
+
+        root._children = [client_iconic, client_normal]
+        conn = FakeConnection({100: client_iconic, 200: client_normal})
+
+        hidden_clients, hidden_frames = _build_hidden_sets(
+            conn, root, ATOMS, current_desktop=None
+        )
+        self.assertIn(100, hidden_clients)
+        self.assertNotIn(200, hidden_clients)
+        self.assertIn(10, hidden_frames)
+        self.assertNotIn(20, hidden_frames)
+
+    def test_build_hidden_sets_skips_when_empty(self) -> None:
+        """При отсутствии _NET_CLIENT_LIST множества остаются пустыми."""
+        atoms_no_client_list = _Atoms(
+            wm_state=1, net_state=2, hidden=3, any_property=0
+        )
+        root = FakeWindow(id=1)
+        conn = FakeConnection({})
+        clients, frames = _build_hidden_sets(
+            conn, root, atoms_no_client_list, current_desktop=None
+        )
+        self.assertEqual(len(clients), 0)
+        self.assertEqual(len(frames), 0)
+
+    def test_window_in_hidden_frames_is_hidden(self) -> None:
+        """Окно-рамка из множества hidden_frames считается скрытым."""
+        frame = FakeWindow(id=42)
+        self.assertTrue(_is_hidden(frame, ATOMS, hidden_frames={42}))
+
+    def test_window_in_hidden_clients_is_hidden(self) -> None:
+        """Клиентское окно из множества hidden_clients считается скрытым."""
+        win = FakeWindow(id=99)
+        self.assertTrue(_is_hidden(win, ATOMS, hidden_clients={99}))
+
+    def test_desktop_window_type_is_hidden(self) -> None:
+        """Окно рабочего стола (_NET_WM_WINDOW_TYPE_DESKTOP) скрывается."""
+        desktop_win = FakeWindow(window_type=[ATOMS.net_window_type_desktop])
+        self.assertTrue(_is_hidden(desktop_win, ATOMS))
+
+    def test_guard_window_is_hidden(self) -> None:
+        """Служебное окно менеджера окон (guard window) скрывается."""
+        guard_bytes = FakeWindow(wm_name=b"muffin guard window")
+        self.assertTrue(_is_hidden(guard_bytes, ATOMS))
+        guard_str = FakeWindow(wm_name="mutter guard window")
+        self.assertTrue(_is_hidden(guard_str, ATOMS))
+
+    def test_transient_for_hidden_parent_is_hidden(self) -> None:
+        """Дочернее диалоговое окно скрытого родителя скрывается."""
+        dialog = FakeWindow(transient_for=100)
+        self.assertTrue(_is_hidden(dialog, ATOMS, hidden_clients={100}))
+        self.assertTrue(_is_hidden(dialog, ATOMS, hidden_frames={100}))
+
+    def test_transient_for_unmapped_parent_is_hidden(self) -> None:
+        """Вспомогательное окно с неотображённым родителем скрывается."""
+        unmapped_parent = FakeWindow(id=50, map_state=0)
+        conn = FakeConnection({50: unmapped_parent})
+        child = FakeWindow(transient_for=50)
+        self.assertTrue(_is_hidden(child, ATOMS, connection=conn))
 
 
 if __name__ == "__main__":
