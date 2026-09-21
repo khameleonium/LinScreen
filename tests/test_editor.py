@@ -9,13 +9,22 @@ import unittest
 # создания приложения Qt.
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import QPointF, QRectF  # noqa: E402
+from PySide6.QtCore import QPointF, QRectF, QSize  # noqa: E402
 from PySide6.QtGui import QColor, QImage  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
 from editor.canvas import AnnotationScene  # noqa: E402
-from editor.items import ArrowItem, BlurItem, FrameItem, LabelItem, StepItem  # noqa: E402
+from editor.icons import render_tool_icon  # noqa: E402
+from editor.items import (  # noqa: E402
+    ArrowItem,
+    BlurItem,
+    CropOverlayItem,
+    FrameItem,
+    LabelItem,
+    StepItem,
+)
 from editor.tools import Tool  # noqa: E402
+from editor.window import EditorWindow  # noqa: E402
 
 _application = QApplication.instance() or QApplication([])
 
@@ -138,6 +147,119 @@ class SceneRenderTest(unittest.TestCase):
         scene._create_step(QPointF(50, 50))
         numbers = [item._number for item in scene.items() if isinstance(item, StepItem)]
         self.assertEqual(sorted(numbers), [1, 2])
+
+
+class ToolIconsTest(unittest.TestCase):
+    """Проверка генерации векторных пиктограмм инструментов."""
+
+    def test_all_tools_have_valid_icons(self) -> None:
+        """Для каждого инструмента генерируется непустая пиктограмма."""
+        for tool in Tool:
+            icon = render_tool_icon(tool, size=22)
+            self.assertFalse(icon.isNull())
+            pixmap = icon.pixmap(22, 22)
+            self.assertFalse(pixmap.isNull())
+            self.assertEqual(pixmap.width(), 22)
+            self.assertEqual(pixmap.height(), 22)
+
+    def test_icon_caching(self) -> None:
+        """Повторный запрос возвращает кэшированный экземпляр."""
+        icon1 = render_tool_icon(Tool.CROP, size=24)
+        icon2 = render_tool_icon(Tool.CROP, size=24)
+        self.assertIs(icon1, icon2)
+
+
+class CropToolTest(unittest.TestCase):
+    """Проверка работы инструмента кадрирования."""
+
+    def setUp(self) -> None:
+        self.image = make_image(400, 300)
+        self.scene = AnnotationScene(self.image)
+
+    def test_crop_changes_size_and_emits_signal(self) -> None:
+        """Кадрирование уменьшает размер снимка и отправляет сигнал."""
+        resized_sizes: list[QSize] = []
+        self.scene.imageResized.connect(resized_sizes.append)
+
+        crop_rect = QRectF(50, 40, 200, 150)
+        self.scene.apply_crop(crop_rect)
+
+        self.assertEqual(self.scene.source_image.width(), 200)
+        self.assertEqual(self.scene.source_image.height(), 150)
+        self.assertEqual(self.scene.sceneRect(), QRectF(0, 0, 200, 150))
+        self.assertEqual(len(resized_sizes), 1)
+        self.assertEqual(resized_sizes[0], QSize(200, 150))
+
+    def test_crop_undo_and_redo(self) -> None:
+        """Отмена кадрирования восстанавливает исходный размер и аннотации."""
+        arrow = ArrowItem(QColor(255, 0, 0), 3)
+        arrow.set_line(QPointF(10, 10), QPointF(50, 50))
+        self.scene._register(arrow)
+
+        self.scene.apply_crop(QRectF(0, 0, 100, 100))
+        self.assertEqual(self.scene.source_image.size(), QSize(100, 100))
+
+        # Отмена возвращает исходный снимок 400x300 и стрелку
+        self.scene.undo()
+        self.assertEqual(self.scene.source_image.size(), QSize(400, 300))
+        self.assertIn(arrow, self.scene.items())
+
+        # Повтор кадрирования снова обрезает растр
+        self.scene.redo()
+        self.assertEqual(self.scene.source_image.size(), QSize(100, 100))
+
+    def test_crop_switch_tool_cancels_overlay(self) -> None:
+        """Смена инструмента убирает оверлей кадрирования."""
+        self.scene.tool = Tool.CROP
+        overlay = CropOverlayItem(self.scene.sceneRect())
+        overlay.set_crop_rect(QRectF(10, 10, 100, 100))
+        self.scene._crop_overlay = overlay
+        self.scene.addItem(overlay)
+
+        self.assertTrue(self.scene.is_cropping)
+        self.scene.tool = Tool.ARROW
+        self.assertFalse(self.scene.is_cropping)
+        self.assertIsNone(self.scene._crop_overlay)
+
+    def test_crop_overlay_bounding_rect(self) -> None:
+        """Охватывающий прямоугольник оверлея включает сцену и выделение."""
+        overlay = CropOverlayItem(QRectF(0, 0, 400, 300))
+        overlay.set_crop_rect(QRectF(50, 50, 100, 100))
+        bounds = overlay.boundingRect()
+        self.assertTrue(bounds.contains(QPointF(50, 50)))
+        self.assertEqual(overlay.crop_rect(), QRectF(50, 50, 100, 100))
+
+
+class EditorWindowTest(unittest.TestCase):
+    """Проверка интерфейса окна редактора аннотаций."""
+
+    def setUp(self) -> None:
+        self.window = EditorWindow(make_image(500, 400))
+
+    def tearDown(self) -> None:
+        self.window.close()
+
+    def test_tool_actions_have_icons_and_tooltips(self) -> None:
+        """Все кнопки инструментов имеют значки и подсказки."""
+        self.assertEqual(len(self.window._tool_actions), 8)
+        for tool, action in self.window._tool_actions.items():
+            self.assertFalse(action.icon().isNull(), f"Значок отсутствует у {tool}")
+            self.assertTrue(len(action.toolTip()) > 0, f"Подсказка отсутствует у {tool}")
+            self.assertIn(tool.label, action.toolTip())
+
+    def test_escape_cancels_crop_before_close(self) -> None:
+        """Esc сбрасывает режим обрезки без закрытия окна."""
+        self.window.show()
+        self.window._activate_tool(Tool.CROP)
+        overlay = CropOverlayItem(self.window._scene.sceneRect())
+        overlay.set_crop_rect(QRectF(10, 10, 100, 100))
+        self.window._scene._crop_overlay = overlay
+        self.window._scene.addItem(overlay)
+
+        self.assertTrue(self.window._scene.is_cropping)
+        self.window._handle_close_or_cancel()
+        self.assertFalse(self.window._scene.is_cropping)
+        self.assertTrue(self.window.isVisible())
 
 
 if __name__ == "__main__":

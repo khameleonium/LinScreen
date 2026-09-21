@@ -21,6 +21,7 @@ VENV=".venv"
 FORMAT="${LINSCREEN_FORMAT:-appimage}"
 FFMPEG_URL="https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n8.1-latest-linux64-gpl-8.1.tar.xz"
 APPIMAGETOOL_URL="https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage"
+RUNTIME_URL="https://github.com/AppImage/type2-runtime/releases/download/continuous/runtime-x86_64"
 
 # Окружение сборки создаётся при первом запуске.
 if [ ! -x "$VENV/bin/python" ]; then
@@ -61,12 +62,16 @@ if [ "$FORMAT" = "dir" ]; then
     exit 0
 fi
 
-# Инструмент упаковки загружается однократно.
+# Инструмент упаковки и runtime загружаются однократно.
+mkdir -p vendor
 if [ ! -x vendor/appimagetool ]; then
     echo "Загрузка упаковщика AppImage…"
-    mkdir -p vendor
     curl -L -o vendor/appimagetool "$APPIMAGETOOL_URL"
     chmod +x vendor/appimagetool
+fi
+if [ ! -f vendor/runtime-x86_64 ]; then
+    echo "Загрузка runtime AppImage…"
+    curl -L -o vendor/runtime-x86_64 "$RUNTIME_URL"
 fi
 
 echo "Подготовка образа…"
@@ -110,7 +115,7 @@ APPRUN
 chmod +x "$APPDIR/AppRun"
 
 echo "Упаковка образа…"
-ARCH=x86_64 vendor/appimagetool --no-appstream "$APPDIR" dist/LinScreen-x86_64.AppImage
+ARCH=x86_64 vendor/appimagetool --no-appstream --runtime-file vendor/runtime-x86_64 "$APPDIR" dist/LinScreen-x86_64.AppImage
 
 echo
 echo "Готово: $(realpath dist/LinScreen-x86_64.AppImage) ($(du -h dist/LinScreen-x86_64.AppImage | cut -f1))"

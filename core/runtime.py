@@ -9,8 +9,20 @@
 
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
+
+
+def is_appimage() -> bool:
+    """Признак запуска из смонтированного образа AppImage."""
+    return bool(os.environ.get("APPIMAGE"))
+
+
+def appimage_path() -> Path | None:
+    """Путь к исполняемому файлу AppImage на диске пользователя."""
+    path = os.environ.get("APPIMAGE")
+    return Path(path).resolve() if path else None
 
 
 def is_frozen() -> bool:
@@ -35,8 +47,10 @@ def executable_path() -> Path:
 
     Для собранного файла это он сам, для исходных текстов - интерпретатор
     вместе с точкой входа, что учитывается вызывающей стороной.
+    Символические ссылки не раскрываются через resolve(), чтобы сохранить
+    путь к интерпретатору виртуального окружения.
     """
-    return Path(sys.executable).resolve()
+    return Path(sys.executable).absolute()
 
 
 # Переменные, которые сборщик подменяет на время работы приложения,
@@ -59,8 +73,6 @@ def child_environment(source: dict[str, str] | None = None) -> dict[str, str]:
     загрузила бы чужие библиотеки и отказалась работать, поэтому исходные
     значения восстанавливаются.
     """
-    import os
-
     environment = dict(source if source is not None else os.environ)
     if not is_frozen():
         return environment

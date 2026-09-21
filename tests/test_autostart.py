@@ -58,6 +58,18 @@ class AutostartTest(unittest.TestCase):
         self.assertEqual(len(command), 2)
         self.assertTrue(command[1].endswith("main.py"))
 
+    def test_launch_command_from_appimage(self) -> None:
+        """Для AppImage команда запуска ссылается непосредственно на файл образа."""
+        with tempfile.NamedTemporaryFile(suffix=".AppImage") as fake_appimage:
+            os.environ["APPIMAGE"] = fake_appimage.name
+            try:
+                command = autostart.launch_command()
+                self.assertEqual(command, [fake_appimage.name])
+                entry = autostart.desktop_entry()
+                self.assertIn(f"Exec={fake_appimage.name}", entry)
+            finally:
+                os.environ.pop("APPIMAGE", None)
+
     def test_entry_points_to_current_interpreter(self) -> None:
         """Команда запуска ссылается на текущий интерпретатор и точку входа."""
         content = autostart.desktop_entry()

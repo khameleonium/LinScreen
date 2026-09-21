@@ -21,6 +21,7 @@ class Tool(str, Enum):
     BLUR = "blur"
     TEXT = "text"
     STEP = "step"
+    CROP = "crop"
 
     @property
     def label(self) -> str:
@@ -33,6 +34,7 @@ class Tool(str, Enum):
             Tool.BLUR: tr("Размытие"),
             Tool.TEXT: tr("Текст"),
             Tool.STEP: tr("Нумератор"),
+            Tool.CROP: tr("Обрезка"),
         }[self]
 
     @property
@@ -46,6 +48,7 @@ class Tool(str, Enum):
             Tool.BLUR: tr("Выделить область для скрытия"),
             Tool.TEXT: tr("Щелчок и ввод текста"),
             Tool.STEP: tr("Щелчок ставит очередной номер"),
+            Tool.CROP: tr("Выделить область (Enter — обрезать, Esc — отмена)"),
         }[self]
 
 

@@ -13,7 +13,13 @@ import shlex
 from pathlib import Path
 
 from core.i18n import tr
-from core.runtime import executable_path, is_frozen, project_root
+from core.runtime import (
+    appimage_path,
+    executable_path,
+    is_appimage,
+    is_frozen,
+    project_root,
+)
 
 APPLICATION_ID = "linscreen"
 DESKTOP_FILE_NAME = f"{APPLICATION_ID}.desktop"
@@ -48,10 +54,15 @@ def launch_command() -> list[str]:
     """
     Команда повторного запуска приложения.
 
-    Для собранного файла это он сам, для исходных текстов - текущий
-    интерпретатор вместе с точкой входа, благодаря чему сохраняется
-    запуск из виртуального окружения.
+    Для образа AppImage используется путь к файлу самого образа. Для обычного
+    собранного файла это он сам, для исходных текстов - текущий интерпретатор
+    вместе с точкой входа, благодаря чему сохраняется запуск из виртуального
+    окружения.
     """
+    if is_appimage():
+        image = appimage_path()
+        if image is not None and image.is_file():
+            return [str(image)]
     if is_frozen():
         return [str(executable_path())]
     return [str(executable_path()), str(project_root() / "main.py")]

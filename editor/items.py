@@ -297,3 +297,135 @@ class StepItem(QGraphicsItem):
             QPointF(-metrics.horizontalAdvance(text) / 2, metrics.capHeight() / 2),
             text,
         )
+
+
+class CropOverlayItem(QGraphicsItem):
+    """
+    Интерактивный оверлей кадрирования снимка.
+
+    Затемняет невыбранную область изображения полупрозрачной маской,
+    выделяет область кадрирования контрастной рамкой, угловыми засечками
+    и плашкой с текущими геометрическими размерами выделения.
+    """
+
+    def __init__(self, scene_rect: QRectF) -> None:
+        super().__init__()
+        self._scene_rect = scene_rect
+        self._crop_rect = QRectF()
+        # Оверлей должен находиться поверх всех аннотаций.
+        self.setZValue(10000.0)
+        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, False)
+        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable, False)
+
+    def set_scene_rect(self, rect: QRectF) -> None:
+        """Обновление границ всей сцены снимка."""
+        self.prepareGeometryChange()
+        self._scene_rect = rect
+        self.update()
+
+    def set_crop_rect(self, rect: QRectF) -> None:
+        """Задание новой геометрии выделяемой области кадрирования."""
+        self.prepareGeometryChange()
+        self._crop_rect = rect
+        self.update()
+
+    def crop_rect(self) -> QRectF:
+        """Нормализованный прямоугольник области кадрирования."""
+        return self._crop_rect.normalized()
+
+    def boundingRect(self) -> QRectF:  # noqa: N802 - имя определено Qt
+        """Охватывающий прямоугольник оверлея."""
+        return self._scene_rect.united(self._crop_rect.normalized()).adjusted(
+            -20.0, -20.0, 20.0, 20.0
+        )
+
+    def paint(
+        self,
+        painter: QPainter,
+        option: QStyleOptionGraphicsItem,
+        widget: QWidget | None = None,
+    ) -> None:
+        """Отрисовка затемняющей маски, контура и бейджа с размерами."""
+        r = self._crop_rect.normalized()
+
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        # 1. Затемняющая маска вокруг выбранного прямоугольника
+        mask_path = QPainterPath()
+        mask_path.addRect(self._scene_rect)
+        if r.isValid() and r.width() >= 1.0 and r.height() >= 1.0:
+            mask_path.addRect(r)
+        mask_path.setFillRule(Qt.FillRule.OddEvenFill)
+        painter.fillPath(mask_path, QBrush(QColor(0, 0, 0, 140)))
+
+        if not r.isValid() or r.width() < 3.0 or r.height() < 3.0:
+            return
+
+        # 2. Пунктирная белая рамка границы обрезки
+        dashed_pen = QPen(QColor(255, 255, 255, 230), 1.5, Qt.PenStyle.DashLine)
+        painter.setPen(dashed_pen)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawRect(r)
+
+        # 3. Контрастные угловые засечки
+        corner_len = min(14.0, min(r.width(), r.height()) / 2.5)
+        if corner_len > 2.0:
+            corner_pen = QPen(QColor(255, 255, 255), 3.0)
+            corner_pen.setCapStyle(Qt.PenCapStyle.SquareCap)
+            painter.setPen(corner_pen)
+            # Верхний левый угол
+            painter.drawLine(QPointF(r.left(), r.top() + corner_len), QPointF(r.left(), r.top()))
+            painter.drawLine(QPointF(r.left(), r.top()), QPointF(r.left() + corner_len, r.top()))
+            # Верхний правый угол
+            painter.drawLine(QPointF(r.right() - corner_len, r.top()), QPointF(r.right(), r.top()))
+            painter.drawLine(QPointF(r.right(), r.top()), QPointF(r.right(), r.top() + corner_len))
+            # Нижний левый угол
+            painter.drawLine(
+                QPointF(r.left(), r.bottom() - corner_len), QPointF(r.left(), r.bottom())
+            )
+            painter.drawLine(
+                QPointF(r.left(), r.bottom()), QPointF(r.left() + corner_len, r.bottom())
+            )
+            # Нижний правый угол
+            painter.drawLine(
+                QPointF(r.right() - corner_len, r.bottom()), QPointF(r.right(), r.bottom())
+            )
+            painter.drawLine(
+                QPointF(r.right(), r.bottom()), QPointF(r.right(), r.bottom() - corner_len)
+            )
+
+        # 4. Бейдж с текущими размерами в пикселях (Ш x В)
+        badge_text = f"{int(round(r.width()))} × {int(round(r.height()))}"
+        font = QFont()
+        font.setPointSize(9)
+        font.setBold(True)
+        metrics = QFontMetricsF(font)
+        text_width = metrics.horizontalAdvance(badge_text)
+        text_height = metrics.capHeight()
+
+        badge_w = text_width + 12.0
+        badge_h = text_height + 8.0
+
+        # Позиционирование бейджа: снизу от рамки или внутри неё, если снизу нет места
+        badge_x = r.center().x() - badge_w / 2.0
+        badge_y = r.bottom() + 6.0
+        if badge_y + badge_h > self._scene_rect.bottom():
+            badge_y = r.bottom() - badge_h - 6.0
+
+        # Коррекция по горизонтали, чтобы бейдж не вылезал за границы сцены
+        badge_x = max(
+            self._scene_rect.left() + 2.0,
+            min(badge_x, self._scene_rect.right() - badge_w - 2.0),
+        )
+
+        badge_rect = QRectF(badge_x, badge_y, badge_w, badge_h)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QBrush(QColor(0, 0, 0, 190)))
+        painter.drawRoundedRect(badge_rect, 3.0, 3.0)
+
+        painter.setFont(font)
+        painter.setPen(QColor(255, 255, 255))
+        painter.drawText(
+            QPointF(badge_x + 6.0, badge_y + badge_h - 4.0),
+            badge_text,
+        )

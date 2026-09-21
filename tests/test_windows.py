@@ -16,9 +16,11 @@ from capture.windows import (
 )
 
 
-def make(x: int, y: int, width: int, height: int, depth: int = 0) -> InterfaceObject:
+def make(
+    x: int, y: int, width: int, height: int, depth: int = 0, group: int = 0
+) -> InterfaceObject:
     """Объект интерфейса с заданными границами."""
-    return InterfaceObject(QRect(x, y, width, height), depth)
+    return InterfaceObject(QRect(x, y, width, height), depth, group)
 
 
 class ObjectSearchTest(unittest.TestCase):
@@ -34,6 +36,34 @@ class ObjectSearchTest(unittest.TestCase):
         """Служебное окно во весь экран уступает обычному окну."""
         objects = [make(50, 50, 400, 300), make(0, 0, 1920, 1080)]
         self.assertEqual(object_at(objects, QPoint(100, 100)), QRect(50, 50, 400, 300))
+
+    def test_foreground_window_occludes_smaller_background_window(self) -> None:
+        """Окно переднего плана перекрывает окно меньшего размера на заднем плане."""
+        background = make(80, 80, 800, 550, group=0)
+        foreground = make(0, 0, 1920, 1040, group=1)
+        found = object_at([background, foreground], QPoint(100, 150))
+        self.assertEqual(found, QRect(0, 0, 1920, 1040))
+
+    def test_overlapping_windows_respect_stacking_order(self) -> None:
+        """При частичном перекрытии окон в зоне пересечения побеждает верхнее."""
+        win_bottom = make(100, 100, 400, 400, group=0)
+        win_top = make(300, 100, 400, 400, group=1)
+        objects = [win_bottom, win_top]
+        # В зоне пересечения выбирается верхнее окно.
+        self.assertEqual(object_at(objects, QPoint(350, 200)), QRect(300, 100, 400, 400))
+        # В видимой части нижнего окна выбирается нижнее окно.
+        self.assertEqual(object_at(objects, QPoint(150, 200)), QRect(100, 100, 400, 400))
+        # В свободной части верхнего окна выбирается верхнее окно.
+        self.assertEqual(object_at(objects, QPoint(550, 200)), QRect(300, 100, 400, 400))
+
+    def test_foreground_child_widget_wins_over_background_window(self) -> None:
+        """Виджет внутри окна переднего плана выбирается без пробития фона."""
+        background = make(80, 80, 800, 550, group=0)
+        foreground_frame = make(0, 0, 1920, 1040, depth=0, group=1)
+        foreground_widget = make(100, 100, 200, 50, depth=1, group=1)
+        objects = [background, foreground_frame, foreground_widget]
+        found = object_at(objects, QPoint(150, 120))
+        self.assertEqual(found, QRect(100, 100, 200, 50))
 
     def test_point_outside_returns_nothing(self) -> None:
         """Вне всех объектов совпадения нет."""

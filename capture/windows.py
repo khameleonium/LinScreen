@@ -56,7 +56,9 @@ class InterfaceObject:
 
     rect: QRect
     # Глубина вложенности: ноль соответствует окну верхнего уровня.
-    depth: int
+    depth: int = 0
+    # Порядок наложения окон верхнего уровня (Z-порядок): выше значение — ближе к зрителю.
+    group: int = 0
 
     @property
     def area(self) -> int:
@@ -409,6 +411,7 @@ def _collect(
     hidden_clients: set[int] | None = None,
     hidden_frames: set[int] | None = None,
     connection: object | None = None,
+    group: int = 0,
 ) -> None:
     """Рекурсивный обход дерева окон с накоплением границ."""
     if depth > MAXIMUM_DEPTH:
@@ -419,9 +422,8 @@ def _collect(
     except Exception:  # noqa: BLE001 - окно могло исчезнуть во время обхода
         return
 
-    # Потомки перечисляются снизу вверх; порядок сохраняется, а поиск
-    # ведётся с конца перечня.
-    for child in children:
+    # Потомки перечисляются снизу вверх в порядке наложения Z-order.
+    for idx, child in enumerate(children):
         try:
             attributes = child.get_attributes()
             if attributes.map_state != viewable:
@@ -448,9 +450,14 @@ def _collect(
         y = offset_y + geometry.y
         rect = QRect(x, y, geometry.width, geometry.height)
 
+        # Окна верхнего уровня (прямые потомки root при depth == 0) получают
+        # порядковый номер наложения Z-order из индекса перечисления X11.
+        # Все дочерние элементы наследуют группу своего окна верхнего уровня.
+        current_group = idx if depth == 0 else group
+
         if geometry.width >= MINIMUM_SIZE and geometry.height >= MINIMUM_SIZE:
             if limit_rect is None or rect.intersects(limit_rect):
-                objects.append(InterfaceObject(rect, depth))
+                objects.append(InterfaceObject(rect, depth, current_group))
 
         _collect(
             child,
@@ -465,6 +472,7 @@ def _collect(
             hidden_clients,
             hidden_frames,
             connection,
+            current_group,
         )
 
 
@@ -472,16 +480,30 @@ def object_at(objects: list[InterfaceObject], point: QPoint) -> QRect | None:
     """
     Границы объекта под указанной точкой.
 
-    Среди объектов, накрывающих точку, выбирается наименьший по площади:
-    такое правило даёт наиболее точное выделение и не даёт победить
-    служебным окнам во весь экран, которые окружение рабочего стола
-    держит поверх прочих. При равной площади предпочитается объект,
-    отрисованный позже, то есть лежащий выше.
+    Среди окон верхнего уровня выбирается самое верхнее в порядке наложения
+    (наибольший group), накрывающее указанную точку. Окна, лежащие ниже в
+    стеке, считаются перекрытыми и исключаются из рассмотрения.
+
+    Внутри выбранного окна верхнего уровня выбирается объект с наименьшей
+    площадью (наиболее специфичный дочерний элемент интерфейса). При равной
+    площади предпочитается объект с большей глубиной вложенности либо
+    отрисованный позже.
     """
+    matching: list[InterfaceObject] = [
+        item for item in objects if item.rect.contains(point)
+    ]
+    if not matching:
+        return None
+
+    topmost_group = max(item.group for item in matching)
+    candidates = [item for item in matching if item.group == topmost_group]
+
     best: InterfaceObject | None = None
-    for item in objects:
-        if not item.rect.contains(point):
-            continue
-        if best is None or item.area <= best.area:
+    for item in candidates:
+        if (
+            best is None
+            or item.area < best.area
+            or (item.area == best.area and item.depth >= best.depth)
+        ):
             best = item
     return QRect(best.rect) if best is not None else None

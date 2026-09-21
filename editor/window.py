@@ -18,6 +18,7 @@ from PySide6.QtGui import (
     QColor,
     QGuiApplication,
     QImage,
+    QKeyEvent,
     QKeySequence,
     QShowEvent,
 )
@@ -32,6 +33,7 @@ from PySide6.QtWidgets import (
 )
 
 from editor.canvas import AnnotationScene, AnnotationView
+from editor.icons import render_tool_icon
 from editor.tools import Tool
 
 # Предельная доля экрана, занимаемая окном редактора при открытии.
@@ -65,6 +67,7 @@ class EditorWindow(QMainWindow):
         self._build_toolbar()
         self._build_actions_bar()
         self._scene.contentChanged.connect(self._refresh_actions)
+        self._scene.imageResized.connect(self._on_image_resized)
         self._resize_to_content(image)
         self._build_shortcuts()
 
@@ -74,7 +77,8 @@ class EditorWindow(QMainWindow):
         """Панель выбора инструмента и параметров рисования."""
         toolbar = QToolBar(tr("Инструменты"), self)
         toolbar.setMovable(False)
-        toolbar.setIconSize(QSize(18, 18))
+        toolbar.setIconSize(QSize(22, 22))
+        toolbar.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
         self.addToolBar(Qt.ToolBarArea.TopToolBarArea, toolbar)
 
         # Инструменты объединены в группу: активным может быть только один.
@@ -82,9 +86,12 @@ class EditorWindow(QMainWindow):
         group.setExclusive(True)
         for position, tool in enumerate(Tool, start=1):
             action = QAction(tool.label, self)
+            action.setIcon(render_tool_icon(tool))
             action.setCheckable(True)
-            # Подсказка содержит и способ применения, и клавишу вызова.
-            action.setToolTip(tr("{0} (клавиша {1})").format(tool.hint, position))
+            # Подсказка содержит название инструмента, способ применения и клавишу вызова.
+            action.setToolTip(
+                f"{tool.label} — {tr('{0} (клавиша {1})').format(tool.hint, position)}"
+            )
             action.triggered.connect(lambda _checked=False, t=tool: self._select_tool(t))
             group.addAction(action)
             toolbar.addAction(action)
@@ -153,10 +160,31 @@ class EditorWindow(QMainWindow):
 
         close_action = QAction(tr("Закрыть"), self)
         close_action.setShortcut(QKeySequence(Qt.Key.Key_Escape))
-        close_action.triggered.connect(self.close)
+        close_action.triggered.connect(self._handle_close_or_cancel)
         toolbar.addAction(close_action)
 
         self._refresh_actions()
+
+    def keyPressEvent(self, event: QKeyEvent) -> None:  # noqa: N802
+        """Подтверждение кадрирования по клавишам Enter / Return."""
+        if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            if self._scene.is_cropping:
+                self._scene.confirm_crop()
+                event.accept()
+                return
+        super().keyPressEvent(event)
+
+    def _handle_close_or_cancel(self) -> None:
+        """Отмена кадрирования или закрытие окна при нажатии Esc."""
+        if self._scene.is_cropping:
+            self._scene.cancel_crop()
+        else:
+            self.close()
+
+    def _on_image_resized(self, size: QSize) -> None:
+        """Обновление заголовка окна и подгонка масштаба при изменении размера снимка."""
+        self.setWindowTitle(tr("Редактор снимка — {0}×{1}").format(size.width(), size.height()))
+        self._view.fit_to_window()
 
     def _build_shortcuts(self) -> None:
         """Клавиши выбора инструмента и удаления выбранной аннотации."""
