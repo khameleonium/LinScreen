@@ -23,22 +23,13 @@ from PySide6.QtGui import QDesktopServices, QGuiApplication, QImage
 from PySide6.QtWidgets import QApplication, QFileDialog, QWidget
 
 from capture.audio import AudioDevice, list_audio_devices, resolve_audio_inputs
-from capture.portal import (
-    PipeWireStream,
-    ScreenCastPortal,
-    ScreenshotPortal,
-    is_screencast_available,
-    is_screenshot_available,
-)
 from capture.windows import list_objects
 from capture.screen import (
     CaptureBackendError,
     CaptureMode,
-    build_pipewire_video_input,
     build_video_input,
     crop_desktop_image,
     grab_virtual_desktop,
-    grab_with_grim,
     list_monitors,
     virtual_geometry,
 )
@@ -110,13 +101,10 @@ class LinScreenApplication(QObject):
         # мусора уничтожит их сразу после выхода из обработчика.
         self._editors: list[EditorWindow] = []
         self._overlay: RegionOverlay | None = None
-        # Запрос к порталу асинхронный: ссылка удерживается до ответа.
-        self._screenshot_portal: ScreenshotPortal | None = None
         # Рамка, обводящая записываемую область во время съёмки.
         self._region_frame = RegionFrame()
         # Область текущей записи: нужна для показа рамки.
         self._recorded_rect: QRect | None = None
-        self._screencast_portal: ScreenCastPortal | None = None
         # Сведения о возможностях сборки FFmpeg, полученные фоновым опросом.
         self._capabilities: object | None = None
         # Журнал работы внешних процессов для самостоятельной диагностики.
@@ -153,12 +141,6 @@ class LinScreenApplication(QObject):
                 is_error=True,
             )
 
-        if not self._session.is_x11:
-            self._notify(
-                tr("Сессия Wayland"),
-                tr("Доступны снимки экрана. Запись требует портала ScreenCast."),
-            )
-
     def _resolve_ffmpeg(self) -> str:
         """Определение пути к бинарнику FFmpeg."""
         try:
@@ -171,14 +153,11 @@ class LinScreenApplication(QObject):
         """
         Проверка принципиальной возможности записи в текущей сессии.
 
-        В X11 достаточно наличия FFmpeg. В Wayland дополнительно требуются
-        портал ScreenCast и фильтр pipewiregrab в сборке FFmpeg.
+        В X11 достаточно наличия FFmpeg с поддержкой захвата x11grab.
         """
-        if not self._ffmpeg_path:
+        if not self._ffmpeg_path or not self._session.is_x11:
             return False
-        if self._session.is_x11:
-            return True
-        return is_screencast_available()
+        return bool(getattr(self._capabilities, "can_capture_x11", True))
 
     def _connect_signals(self) -> None:
         """Связывание источников команд с обработчиками."""
@@ -252,53 +231,14 @@ class LinScreenApplication(QObject):
 
     def _grab_desktop_async(self, on_ready: Callable[[QImage], None]) -> None:
         """
-        Снимок всего рабочего стола способом, пригодным для текущей сессии.
+        Снимок всего рабочего стола в сессии X11.
 
-        В X11 содержимое корневого окна доступно немедленно, поэтому
-        обработчик вызывается сразу. В Wayland снимок выдаёт портал после
-        подтверждения пользователем, и результат приходит сигналом, из-за
-        чего единый путь сделан асинхронным.
+        Содержимое корневого окна считывается нативно через X11/Qt.
         """
-        if self._session.is_x11:
-            try:
-                on_ready(grab_virtual_desktop())
-            except CaptureBackendError as error:
-                self._notify(tr("Снимок экрана"), str(error), is_error=True)
-            return
-
-        if is_screenshot_available():
-            # Портал универсален для любого композитора Wayland, поэтому
-            # проверяется раньше утилит конкретных окружений.
-            portal = ScreenshotPortal(self)
-            portal.captured.connect(on_ready)
-            portal.captured.connect(lambda _image: self._release_portal())
-            portal.cancelled.connect(self._release_portal)
-            portal.failed.connect(self._on_portal_failed)
-            self._screenshot_portal = portal
-            portal.take()
-            return
-
-        if self._session.has_tool("grim"):
-            try:
-                on_ready(grab_with_grim())
-            except CaptureBackendError as error:
-                self._notify(tr("Снимок экрана"), str(error), is_error=True)
-            return
-
-        self._notify(
-            tr("Снимок экрана"),
-            tr("Нет доступного способа съёмки: требуется портал снимков " "либо утилита grim."),
-            is_error=True,
-        )
-
-    def _on_portal_failed(self, text: str) -> None:
-        """Сообщение об отказе портала снимков."""
-        self._notify(tr("Снимок экрана"), text, is_error=True)
-        self._release_portal()
-
-    def _release_portal(self) -> None:
-        """Освобождение ссылки на завершённый запрос портала."""
-        self._screenshot_portal = None
+        try:
+            on_ready(grab_virtual_desktop())
+        except CaptureBackendError as error:
+            self._notify(tr("Снимок экрана"), str(error), is_error=True)
 
     def _perform_screenshot(self, mode: CaptureMode) -> None:
         """Получение снимка согласно выбранному режиму."""
@@ -453,12 +393,6 @@ class LinScreenApplication(QObject):
             self._notify(tr("Запись"), tr("FFmpeg не найден"), is_error=True)
             return
 
-        if not self._session.is_x11:
-            # В Wayland область выбирает сам портал в своём диалоге,
-            # поэтому режим захвата здесь не учитывается.
-            self._start_portal_recording()
-            return
-
         capture_mode = mode if isinstance(mode, CaptureMode) else CaptureMode.REGION
         if capture_mode is CaptureMode.REGION:
             self._grab_desktop_async(
@@ -476,41 +410,6 @@ class LinScreenApplication(QObject):
         screen = QGuiApplication.primaryScreen()
         self._prepare_recording(screen.geometry() if screen else virtual_geometry())
 
-    def _start_portal_recording(self) -> None:
-        """Согласование захвата экрана через портал ScreenCast."""
-        capabilities = self._capabilities
-        # Сведения о сборке собираются фоновым опросом; до его завершения
-        # запись не блокируется, ошибку в этом случае вернёт сам FFmpeg.
-        has_filter = getattr(capabilities, "can_capture_pipewire", True)
-        if not has_filter:
-            self._notify(
-                tr("Запись"),
-                tr(
-                    "Установленная сборка FFmpeg не содержит фильтра pipewiregrab. "
-                    "Запись в Wayland требует FFmpeg версии 7.1 или новее."
-                ),
-                is_error=True,
-            )
-            return
-
-        portal = ScreenCastPortal(self)
-        portal.ready.connect(self._prepare_recording)
-        portal.cancelled.connect(self._release_screencast)
-        portal.failed.connect(self._on_screencast_failed)
-        self._screencast_portal = portal
-        portal.start(show_cursor=self._config.settings.video.show_cursor)
-
-    def _on_screencast_failed(self, text: str) -> None:
-        """Сообщение об отказе портала захвата."""
-        self._notify(tr("Запись"), text, is_error=True)
-        self._release_screencast()
-
-    def _release_screencast(self) -> None:
-        """Завершение сеанса портала захвата."""
-        if self._screencast_portal is not None:
-            self._screencast_portal.close_session()
-            self._screencast_portal = None
-
     def record_monitor(self, index: int) -> None:
         """Запись отдельного монитора по его порядковому номеру."""
         if self._recorder.state.is_busy:
@@ -518,10 +417,6 @@ class LinScreenApplication(QObject):
             return
         if not self._ffmpeg_path:
             self._notify(tr("Запись"), tr("FFmpeg не найден"), is_error=True)
-            return
-        if not self._session.is_x11:
-            # В Wayland выбор монитора выполняет сам портал.
-            self._start_portal_recording()
             return
 
         monitors = list_monitors()
@@ -559,17 +454,12 @@ class LinScreenApplication(QObject):
         audio_devices: list[AudioDevice] = devices if isinstance(devices, list) else []
 
         try:
-            if isinstance(rect, PipeWireStream):
-                # Поток портала уже согласован с пользователем, геометрия
-                # задана композитором.
-                video_input = build_pipewire_video_input(rect, fps=settings.fps)
-            else:
-                video_input = build_video_input(
-                    self._session,
-                    rect,  # type: ignore[arg-type]
-                    fps=settings.fps,
-                    show_cursor=settings.show_cursor,
-                )
+            video_input = build_video_input(
+                self._session,
+                cast(QRect, rect),
+                fps=settings.fps,
+                show_cursor=settings.show_cursor,
+            )
         except CaptureBackendError as error:
             self._notify(tr("Запись"), str(error), is_error=True)
             return
@@ -854,14 +744,12 @@ class LinScreenApplication(QObject):
 
     def _on_recording_finished(self, path: object) -> None:
         """Оповещение об успешном завершении записи."""
-        self._release_screencast()
         self._notify(tr("Запись сохранена"), str(path))
         if self._quit_after_recording:
             self.quit()
 
     def _on_recording_failed(self, message: str) -> None:
         """Оповещение о сбое записи."""
-        self._release_screencast()
         self._notify(tr("Ошибка записи"), message, is_error=True)
         if self._quit_after_recording:
             self.quit()

@@ -839,17 +839,6 @@ class SettingsDialog(QDialog):
             self._hotkey_fields[name] = field
             form.addRow(title, field)
 
-        if not self._session.supports_native_hotkeys:
-            # В сессии Wayland перехват возможен только через портал,
-            # о чём пользователя следует предупредить сразу.
-            warning = QLabel(
-                tr(
-                    "Сессия Wayland: глобальные клавиши требуют портала "
-                    "GlobalShortcuts. Действия доступны через меню трея."
-                )
-            )
-            warning.setWordWrap(True)
-            form.addRow(warning)
         return page
 
     # -------------------------------------------------------------- действия

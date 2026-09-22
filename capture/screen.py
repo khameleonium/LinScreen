@@ -25,7 +25,6 @@ from enum import Enum
 from PySide6.QtCore import QPoint, QRect
 from PySide6.QtGui import QGuiApplication, QImage, QPainter, QScreen
 
-from capture.portal import PipeWireStream
 from core.session import DesktopSession
 from encoder.profiles import VideoInput
 
@@ -204,35 +203,6 @@ def grab_rect(rect: QRect) -> QImage:
     return crop_desktop_image(grab_virtual_desktop(), rect)
 
 
-def grab_with_grim(rect: QRect | None = None) -> QImage:
-    """
-    Снимок экрана внешней утилитой grim.
-
-    Используется в сессиях Wayland на композиторах wlroots, где прямой
-    доступ к содержимому экрана средствами Qt не предоставляется.
-    """
-    if shutil.which("grim") is None:
-        raise CaptureBackendError(tr("Утилита grim не установлена"))
-
-    args = ["grim"]
-    if rect is not None:
-        # Формат области: "X,YxШИРИНАxВЫСОТА" согласно интерфейсу утилиты.
-        args += ["-g", f"{rect.x()},{rect.y()} {rect.width()}x{rect.height()}"]
-    # Вывод направляется в стандартный поток, файл на диске не создаётся.
-    args.append("-")
-
-    completed = subprocess.run(args, capture_output=True, timeout=15, shell=False, check=False)
-    if completed.returncode != 0 or not completed.stdout:
-        raise CaptureBackendError(
-            completed.stderr.decode("utf-8", "replace").strip() or tr("Снимок не получен")
-        )
-
-    image = QImage()
-    if not image.loadFromData(completed.stdout):
-        raise CaptureBackendError(tr("Не удалось прочитать данные снимка"))
-    return image
-
-
 # ===========================================================================
 # Определение активного окна
 # ===========================================================================
@@ -333,16 +303,11 @@ def build_video_input(
     """
     Сборка аргументов входа FFmpeg для записи указанной области.
 
-    В сессии X11 применяется прямой захват корневого окна. В сессии Wayland
-    требуется портал ScreenCast, выдающий дескриптор потока PipeWire; этот
-    бэкенд подключается модулем capture/portal.py.
+    В сессии X11 применяется прямой захват корневого окна через x11grab.
     """
     if not session.is_x11:
         raise CaptureBackendError(
-            tr(
-                "Прямой захват доступен только в сессии X11. Для Wayland "
-                "применяется поток портала, см. build_pipewire_video_input()."
-            )
+            tr("Захват видео поддерживается только в сессии X11.")
         )
 
     ratio = device_pixel_ratio()
@@ -377,34 +342,4 @@ def build_video_input(
         height=height,
         # Размер уже приведён к чётному, дополнение фильтром не требуется.
         needs_even_padding=False,
-    )
-
-
-def build_pipewire_video_input(
-    stream: PipeWireStream,
-    fps: int = 30,
-) -> VideoInput:
-    """
-    Сборка входа FFmpeg для потока PipeWire, выданного порталом.
-
-    Источником выступает фильтр pipewiregrab, появившийся в FFmpeg 7.1.
-    Дескриптор передаётся дочернему процессу по наследству, поэтому его
-    копия создаётся без признака закрытия при запуске процесса.
-
-    Отрисовка указателя мыши задаётся не здесь, а при согласовании сеанса
-    с порталом параметром cursor_mode, поэтому отдельного флага нет.
-    """
-    return VideoInput(
-        args=[
-            "-f",
-            "lavfi",
-            "-i",
-            f"pipewiregrab=fd={stream.file_descriptor}:node={stream.node_id}",
-        ],
-        fps=fps,
-        width=stream.width or None,
-        height=stream.height or None,
-        # Размер потока задаёт композитор и чётность не гарантируется,
-        # поэтому дополнение фильтром остаётся включённым.
-        needs_even_padding=True,
     )

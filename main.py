@@ -234,11 +234,6 @@ def self_test() -> int:
     print(
         tr("Палитра GIF: {0}").format(tr("да") if capabilities.can_build_gif_palette else tr("нет"))
     )
-    print(
-        tr("Захват PipeWire (Wayland): {0}").format(
-            tr("да") if capabilities.can_capture_pipewire else tr("нет")
-        )
-    )
 
     from encoder.images import is_avif_available
 
@@ -252,6 +247,11 @@ def self_test() -> int:
 
     problems = capabilities.missing_essentials()
 
+    if not session.is_x11:
+        problems.append(
+            tr("Текущая сессия не является X11. LinScreen предназначен только для X11.")
+        )
+
     # Проверка составных частей, попадающих в сборку: их отсутствие
     # проявилось бы только при попытке воспользоваться соответствующей
     # возможностью, что заметно позже момента запуска.
@@ -259,7 +259,6 @@ def self_test() -> int:
         ("pynput", tr("глобальные клавиши")),
         ("Xlib", tr("определение активного окна")),
         ("PIL", tr("сохранение изображений")),
-        ("PySide6.QtDBus", tr("порталы рабочего стола")),
     ):
         try:
             __import__(module)
@@ -312,6 +311,19 @@ def main() -> int:
     # Приложение живёт в трее: закрытие редактора или настроек работу
     # процесса не прекращает.
     application.setQuitOnLastWindowClosed(False)
+
+    from core.session import detect_session
+    session = detect_session()
+    if not session.is_x11:
+        QMessageBox.critical(
+            None,
+            "LinScreen",
+            tr(
+                "LinScreen (сборка для X11) не поддерживает сессии Wayland.\n\n"
+                "Для работы переключитесь в сессию X11 на экране входа в систему."
+            ),
+        )
+        return 1
 
     if not TrayIcon.is_available():
         QMessageBox.critical(

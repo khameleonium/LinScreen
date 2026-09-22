@@ -49,7 +49,6 @@ FALLBACK_SEARCH_PATHS: tuple[str, ...] = (
 X11_DEMUXER = "x11grab"
 PULSE_DEMUXER = "pulse"
 ALSA_DEMUXER = "alsa"
-PIPEWIRE_FILTER = "pipewiregrab"
 KMS_DEMUXER = "kmsgrab"
 
 
@@ -162,13 +161,6 @@ class FFmpegCapabilities:
         return self.has_demuxer(X11_DEMUXER)
 
     @property
-    def can_capture_pipewire(self) -> bool:
-        """Признак наличия встроенного источника PipeWire."""
-        # Фильтр pipewiregrab появился в сборках начиная с FFmpeg 7.1 и
-        # позволяет обойтись без посредника в виде GStreamer.
-        return self.has_filter(PIPEWIRE_FILTER)
-
-    @property
     def can_capture_pulse(self) -> bool:
         """
         Признак поддержки источников PulseAudio и PipeWire.
@@ -210,12 +202,9 @@ class FFmpegCapabilities:
                     "имена устройств приложение получает у звукового сервера."
                 )
             )
-        if not (self.can_capture_x11 or self.can_capture_pipewire):
+        if not self.can_capture_x11:
             problems.append(
-                tr(
-                    "Отсутствуют источники захвата x11grab и pipewiregrab: "
-                    "запись возможна только через внешние утилиты."
-                )
+                tr("Отсутствует источник захвата x11grab: запись экрана недоступна.")
             )
         return problems
 
