@@ -33,6 +33,24 @@ except ImportError:  # pragma: no cover - проверяется режимом 
     HeaderFields = MatchRule = message_bus = new_method_return = None
     DBusNameFlags = Proxy = None
 
+# Описание объекта службы для запроса Introspect. Утилита gdbus перед
+# вызовом метода запрашивает описание и без ответа ждёт около трёх секунд;
+# сочетания клавиш GNOME вызывают службу именно через gdbus.
+INTROSPECTABLE_INTERFACE = "org.freedesktop.DBus.Introspectable"
+INTROSPECTION_XML = f"""<node>
+  <interface name="{INTROSPECTABLE_INTERFACE}">
+    <method name="Introspect"><arg name="xml" type="s" direction="out"/></method>
+  </interface>
+  <interface name="{BUS_INTERFACE}">
+    <method name="Activate"><arg name="action" type="s" direction="in"/></method>
+    <method name="ReportWindows">
+      <arg name="token" type="s" direction="in"/>
+      <arg name="payload" type="s" direction="in"/>
+    </method>
+  </interface>
+</node>
+"""
+
 # Коды ответа RequestName согласно спецификации D-Bus.
 NAME_PRIMARY_OWNER = 1
 NAME_ALREADY_OWNER = 4
@@ -114,7 +132,9 @@ class BusService(QObject):
         """Начало приёма вызовов."""
         if MatchRule is None or self._listener is not None:
             return
-        rule = MatchRule(type="method_call", path=BUS_PATH, interface=BUS_INTERFACE)
+        # Интерфейс в правиле не указывается: кроме вызовов службы
+        # принимается и запрос описания объекта.
+        rule = MatchRule(type="method_call", path=BUS_PATH)
         listener = portal.SignalListener(rule, self, on_message=self._answer)
         listener.received.connect(self._dispatch)
         self._listener = listener
@@ -134,15 +154,21 @@ class BusService(QObject):
         поток интерфейса: сборщик ждёт их в фоновом потоке.
         """
         member = message.header.fields.get(HeaderFields.member)
+        interface = message.header.fields.get(HeaderFields.interface)
         if member == "ReportWindows" and len(message.body) >= 2:
             _deliver_report(str(message.body[0]), str(message.body[1]))
+        if interface == INTROSPECTABLE_INTERFACE and member == "Introspect":
+            reply = new_method_return(message, "s", (INTROSPECTION_XML,))
+        else:
+            reply = new_method_return(message)
         try:
-            portal.connection().send(new_method_return(message))
+            portal.connection().send(reply)
         except Exception:  # noqa: BLE001 - вызывающая сторона могла отключиться
             pass
 
     def _dispatch(self, message: Any) -> None:
         """Обработка вызова в потоке интерфейса."""
         member = message.header.fields.get(HeaderFields.member)
-        if member == "Activate" and message.body:
+        interface = message.header.fields.get(HeaderFields.interface)
+        if interface == BUS_INTERFACE and member == "Activate" and message.body:
             self.actionRequested.emit(str(message.body[0]))

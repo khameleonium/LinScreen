@@ -397,5 +397,11 @@
  "снимки экрана": "screenshots",
  "собранный файл": "bundled file",
  "сохранение изображений": "image saving",
- "сочетания клавиш KDE: {0}": "KDE keyboard shortcuts: {0}"
+ "сочетания клавиш KDE: {0}": "KDE keyboard shortcuts: {0}",
+ "Сочетания LinScreen добавлены в «Настройки» GNOME → «Клавиатура» → «Комбинации клавиш» → «Дополнительные комбинации клавиш»: там их можно изменить. Убрать их вместе с другими следами программы можно в «Настройки» → «Общие» → «Удалить программу из системы…» или командой «linscreen --uninstall».": "LinScreen shortcuts were added to GNOME Settings → Keyboard → Keyboard Shortcuts → Custom Shortcuts, where they can be changed. They can be removed together with the other traces of the program in Settings → General → “Remove the program from the system…” or with the command “linscreen --uninstall”.",
+ "комбинация клавиш GNOME: {0}": "GNOME keyboard shortcut: {0}",
+ "портал, версия {0}": "portal, version {0}",
+ "служба сочетаний KDE": "KDE shortcut service",
+ "комбинации клавиш GNOME": "GNOME keyboard shortcuts",
+ "Глобальные клавиши: {0}": "Global shortcuts: {0}"
 }

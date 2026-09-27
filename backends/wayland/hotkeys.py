@@ -14,7 +14,11 @@ Plasma 5.27 реализует раннюю редакцию специфика�
 KDE (kglobalaccel) напрямую - ей же пользуется и сам портал KDE, поэтому
 сочетания видны и настраиваются в «Параметрах системы» как обычно.
 
-При отсутствии обоих путей действия вызываются командой приложения из
+GNOME до версии 48 портала не имеет. Для него сочетания записываются в
+пользовательские комбинации клавиш GNOME (backends/wayland/gnome_keys.py):
+клавиша запускает команду, передающую действие работающему экземпляру.
+
+При отсутствии всех путей действия вызываются командой приложения из
 командной строки (см. main.py): такую команду можно назначить на клавишу
 в настройках любого рабочего стола.
 
@@ -27,6 +31,7 @@ from __future__ import annotations
 from core.i18n import tr
 
 import time
+from functools import partial
 from typing import Any, cast
 
 from PySide6.QtCore import QObject, Signal
@@ -64,9 +69,14 @@ LEGACY_KGLOBALACCEL_COMPONENTS = (
 # Способы регистрации сочетаний.
 BACKEND_PORTAL = "portal"
 BACKEND_KGLOBALACCEL = "kglobalaccel"
+BACKEND_GNOME = "gnome"
 
 # Пауза перед повторной попыткой, если служба сочетаний KDE ещё не запущена.
 KGLOBALACCEL_RETRY_SEC = 5.0
+
+# Время, в течение которого сигналы dconf считаются следствием собственной
+# записи приложения в комбинации GNOME, а не правкой пользователя.
+GNOME_OWN_WRITE_SEC = 3.0
 
 # Наименьший промежуток между двумя срабатываниями одного действия.
 # Часть реализаций присылает повторное событие при удержании клавиши, и
@@ -182,7 +192,9 @@ def kwin_variants(code: int) -> list[int]:
 Registration = tuple[str, str, dict[str, str], dict[str, tuple[str, str]]]
 
 
-def _register(mapping: dict[str, str], kde: bool, force: bool) -> Registration | None:
+def _register(
+    mapping: dict[str, str], kde: bool, force: bool, gnome: bool = False
+) -> Registration | None:
     """
     Регистрация действий подходящим способом.
 
@@ -201,10 +213,38 @@ def _register(mapping: dict[str, str], kde: bool, force: bool) -> Registration |
         # принимает действий от современных версий xdg-desktop-portal.
         path, assigned, conflicts = _bind_kglobalaccel(mapping, force)
         return BACKEND_KGLOBALACCEL, path, assigned, conflicts
+    if gnome and not is_portal_available():
+        # GNOME до версии 48: портала сочетаний нет, клавиши назначаются
+        # пользовательскими комбинациями GNOME.
+        from backends.wayland import gnome_keys
+
+        if gnome_keys.available():
+            assigned, conflicts = gnome_keys.bind(mapping, _gnome_commands(mapping))
+            return BACKEND_GNOME, "", assigned, conflicts
+        return None
     result = _bind(mapping)
     if result is None:
         return None
+    if gnome:
+        # После обновления GNOME до версии с порталом прежние комбинации
+        # приложения сработали бы вместе с порталом, поэтому снимаются.
+        from backends.wayland import gnome_keys
+
+        gnome_keys.remove_all()
     return BACKEND_PORTAL, result[0], result[1], {}
+
+
+def _gnome_commands(mapping: dict[str, str]) -> dict[str, str]:
+    """Команды для пользовательских комбинаций GNOME по действиям."""
+    from backends.wayland.gnome_keys import activation_command
+    from core.actions import command_line_argument
+    from core.autostart import launch_command
+
+    launch = launch_command()
+    return {
+        action: activation_command(action, launch, command_line_argument(action))
+        for action in mapping
+    }
 
 
 def _kglobalaccel_call(method: str, signature: str | None = None, body: tuple = ()) -> tuple:
@@ -473,6 +513,11 @@ class HotkeyManager(QObject):
         self._suspended = False
         # Номер регистрации: ответ на устаревший запрос отбрасывается.
         self._serial = 0
+        # Номер последней записи клавиш GNOME: устаревшая запись пропускается.
+        self._gnome_generation = 0
+        # До этого момента сигналы dconf вызваны собственными записями
+        # приложения и изменениями пользователя не считаются.
+        self._own_writes_until = 0.0
 
     @property
     def backend(self) -> str:
@@ -481,8 +526,8 @@ class HotkeyManager(QObject):
 
     @property
     def is_active(self) -> bool:
-        """Признак действующей регистрации у портала."""
-        return bool(self._session_path)
+        """Признак действующей регистрации."""
+        return bool(self._backend)
 
     @property
     def assigned(self) -> dict[str, str]:
@@ -505,6 +550,7 @@ class HotkeyManager(QObject):
         self._mapping = wanted
         self._serial += 1
         serial = self._serial
+        self._mark_own_writes()
         run_async(
             self,
             _register,
@@ -513,6 +559,7 @@ class HotkeyManager(QObject):
             wanted,
             self._session.desktop_kind is Desktop.KDE,
             force,
+            self._session.desktop_kind is Desktop.GNOME,
         )
 
     def _on_bound(self, serial: int, result: object) -> None:
@@ -532,6 +579,7 @@ class HotkeyManager(QObject):
             )
             return
         backend, session_path, assigned, conflicts = cast(Registration, result)
+        self._mark_own_writes()
         self._backend = backend
         self._session_path = session_path
         self._bound_mapping = dict(self._mapping)
@@ -551,6 +599,21 @@ class HotkeyManager(QObject):
         """Подписка на срабатывания сочетаний."""
         from jeepney import MatchRule
 
+        if self._backend == BACKEND_GNOME:
+            # Срабатывания приходят вызовом службы приложения (команда
+            # комбинации GNOME), здесь отслеживаются только изменения
+            # комбинаций в «Параметрах» GNOME.
+            from backends.wayland.gnome_keys import DCONF_INTERFACE, DCONF_PATH
+
+            changes = portal.SignalListener(
+                MatchRule(
+                    type="signal", interface=DCONF_INTERFACE, member="Notify", path=DCONF_PATH
+                ),
+                self,
+            )
+            changes.received.connect(self._on_gnome_changed)
+            self._changes_listener = changes
+            return
         if self._backend == BACKEND_KGLOBALACCEL:
             rule = MatchRule(
                 type="signal",
@@ -601,6 +664,52 @@ class HotkeyManager(QObject):
             self._bound_mapping[action] = text
         self.changedExternally.emit(action, text)
 
+    def _mark_own_writes(self) -> None:
+        """Отметка собственной записи в dconf: её сигналы не считаются правкой."""
+        self._own_writes_until = time.monotonic() + GNOME_OWN_WRITE_SEC
+
+    def _on_gnome_changed(self, message: Any) -> None:
+        """Сигнал dconf: возможно, комбинацию изменили в «Параметрах» GNOME."""
+        from backends.wayland.gnome_keys import changed_actions, read_binding
+
+        if self._suspended or time.monotonic() < self._own_writes_until:
+            return
+        actions = changed_actions(message)
+        if "*" in actions:
+            actions = list(self._mapping)
+        for action in actions:
+            if action not in self._mapping:
+                continue
+            run_async(
+                self,
+                read_binding,
+                partial(self._apply_external, action),
+                None,
+                action,
+            )
+
+    def _apply_external(self, action: str, text: object) -> None:
+        """Перенос сочетания, изменённого в настройках рабочего стола."""
+        if not isinstance(text, str) or self._suspended:
+            return
+        if time.monotonic() < self._own_writes_until or self._mapping.get(action) == text:
+            return
+        self._mapping[action] = text
+        if self._bound_mapping is not None:
+            self._bound_mapping[action] = text
+        self._assigned[action] = text
+        self.changedExternally.emit(action, text)
+
+    def _write_gnome_bindings(self, bindings: dict[str, str]) -> None:
+        """Фоновая замена клавиш в комбинациях GNOME с отбрасыванием устаревших."""
+        from backends.wayland.gnome_keys import set_bindings
+
+        self._gnome_generation += 1
+        self._mark_own_writes()
+        run_async(
+            self, set_bindings, lambda _r: None, None, bindings, self._gnome_generation
+        )
+
     def _on_activated(self, message: Any) -> None:
         """Обработка срабатывания сочетания."""
         body: tuple[Any, ...] = tuple(getattr(message, "body", ()))
@@ -646,8 +755,18 @@ class HotkeyManager(QObject):
         Применяется при вводе нового сочетания в настройках: иначе
         нажатие клавиш в поле ввода выполнило бы назначенное действие.
         """
+        if self._suspended:
+            return
         self._suspended = True
+        if self._backend == BACKEND_GNOME:
+            # GNOME перехватывает клавиши комбинаций раньше окна приложения,
+            # и поле ввода не получило бы их. На время ввода они снимаются.
+            self._write_gnome_bindings({action: "" for action in self._assigned})
 
     def resume(self) -> None:
         """Возобновление срабатываний после приостановки."""
+        if not self._suspended:
+            return
         self._suspended = False
+        if self._backend == BACKEND_GNOME:
+            self._write_gnome_bindings(dict(self._assigned))

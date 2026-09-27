@@ -184,6 +184,8 @@ class GeneralSettings:
     check_system_on_start: bool = True
     # Показано сообщение о том, что сочетания добавлены в настройки рабочего стола.
     shortcuts_notice_shown: bool = False
+    # То же для пользовательских комбинаций клавиш GNOME.
+    gnome_shortcuts_notice_shown: bool = False
 
 
 @dataclass
@@ -279,6 +281,8 @@ FIELD_COMMENTS: dict[str, dict[str, str]] = {
         "check_system_on_start": "Проверять недостающие компоненты системы при запуске: "
         "да или нет",
         "shortcuts_notice_shown": "Сообщение о сочетаниях в настройках рабочего стола "
+        "уже показано: да или нет",
+        "gnome_shortcuts_notice_shown": "Сообщение о сочетаниях в комбинациях клавиш GNOME "
         "уже показано: да или нет",
     },
     "magnifier": {

@@ -1057,6 +1057,20 @@ class LinScreenApplication(QObject):
         )
         self._append_log(tr("Сочетания клавиш зарегистрированы: {0}").format(described))
         general = self._config.settings.general
+        if self._hotkeys.backend == "gnome" and not general.gnome_shortcuts_notice_shown:
+            # Сочетания записаны в пользовательские комбинации GNOME.
+            general.gnome_shortcuts_notice_shown = True
+            self._config.save()
+            self._notify(
+                tr("Горячие клавиши"),
+                tr(
+                    "Сочетания LinScreen добавлены в «Настройки» GNOME → «Клавиатура» → "
+                    "«Комбинации клавиш» → «Дополнительные комбинации клавиш»: там их можно "
+                    "изменить. Убрать их вместе с другими следами программы можно в "
+                    "«Настройки» → «Общие» → «Удалить программу из системы…» или командой "
+                    "«linscreen --uninstall»."
+                ),
+            )
         if self._hotkeys.backend == "kglobalaccel" and not general.shortcuts_notice_shown:
             # Приложение добавило свои действия в настройки рабочего стола:
             # пользователь должен знать, где они и как их убрать.

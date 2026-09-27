@@ -4,7 +4,8 @@
 Программа добавляет в систему то, что остаётся и после её закрытия:
     * ярлык в меню приложений и файл автозапуска;
     * значок в каталоге значков пользователя;
-    * сочетания клавиш в настройках KDE (служба kglobalaccel);
+    * сочетания клавиш в настройках KDE (служба kglobalaccel) и
+      пользовательские комбинации клавиш GNOME;
     * разрешения в хранилище порталов: снимки экрана без подтверждения
       (GNOME) и сохранённые разрешения на захват экрана.
 
@@ -66,6 +67,18 @@ def _remove_shortcuts(removed: list[str]) -> None:
         removed.append(tr("сочетания клавиш KDE: {0}").format(component))
 
 
+def _remove_gnome_shortcuts(removed: list[str]) -> None:
+    """Удаление пользовательских комбинаций клавиш GNOME, записанных программой."""
+    from backends.wayland.gnome_keys import GnomeKeysError, remove_all
+
+    try:
+        actions = remove_all()
+    except GnomeKeysError:
+        return
+    for action in actions:
+        removed.append(tr("комбинация клавиш GNOME: {0}").format(action))
+
+
 def _stored_tokens() -> list[str]:
     """Метки разрешений на захват экрана, сохранённые программой."""
     tokens: list[str] = []
@@ -119,6 +132,7 @@ def uninstall(purge: bool = False) -> list[str]:
     """
     removed: list[str] = []
     _remove_shortcuts(removed)
+    _remove_gnome_shortcuts(removed)
     _remove_permissions(removed)
 
     applications = _home("XDG_DATA_HOME", ".local/share") / "applications"

@@ -29,23 +29,10 @@ from PySide6.QtCore import QSocketNotifier, QTimer
 from PySide6.QtWidgets import QApplication, QMessageBox
 
 from app import LinScreenApplication
+from core.actions import COMMAND_LINE_ACTIONS
 from ui.tray import TrayIcon
 
 APPLICATION_VERSION = "1.0"
-
-# Ключи командной строки, передающие действие работающему экземпляру.
-# Их можно назначить на клавиши средствами рабочего стола, если портал
-# глобальных сочетаний недоступен.
-COMMAND_LINE_ACTIONS: dict[str, str] = {
-    "--screenshot": "screenshot_region",
-    "--screenshot-full": "screenshot_fullscreen",
-    "--screenshot-window": "screenshot_window",
-    "--record": "record_toggle",
-    "--pause": "record_toggle_pause",
-    "--settings": "open_settings",
-    "--check-system": "check_system",
-    "--quit": "quit",
-}
 
 # Число уже показанных сообщений об ошибке. Окно показывается только для
 # первой: повторяющийся сбой в обработчике событий иначе завалил бы экран
@@ -221,13 +208,27 @@ def _check_wayland(session: Any, problems: list[str]) -> None:
     for interface, title in (
         (portal.SCREENSHOT_INTERFACE, tr("снимки экрана")),
         (portal.SCREENCAST_INTERFACE, tr("запись экрана")),
-        (portal.SHORTCUTS_INTERFACE, tr("глобальные клавиши")),
     ):
         version = portal.interface_version(interface)
         state = tr("версия {0}").format(version) if version is not None else tr("НЕТ")
         print(tr("Портал «{0}»: {1}").format(title, state))
         if version is None:
             problems.append(tr("Портал не предоставляет возможность: {0}.").format(title))
+
+    # Глобальные клавиши: портал либо собственный способ рабочего стола.
+    version = portal.interface_version(portal.SHORTCUTS_INTERFACE)
+    if version is not None:
+        method = tr("портал, версия {0}").format(version)
+    elif session.desktop_kind.value == "kde" and _kglobalaccel_available():
+        method = tr("служба сочетаний KDE")
+    elif session.desktop_kind.value == "gnome" and _gnome_keys_available():
+        method = tr("комбинации клавиш GNOME")
+    else:
+        method = tr("НЕТ")
+        problems.append(
+            tr("Портал не предоставляет возможность: {0}.").format(tr("глобальные клавиши"))
+        )
+    print(tr("Глобальные клавиши: {0}").format(method))
     registration = portal.registration_error()
     print(
         tr("Регистрация приложения у портала: {0}").format(
@@ -243,6 +244,20 @@ def _check_wayland(session: Any, problems: list[str]) -> None:
                 tr("доступны") if kwin.is_available() else tr("недоступны")
             )
         )
+
+
+def _kglobalaccel_available() -> bool:
+    """Признак работающей службы сочетаний KDE."""
+    from backends.wayland.hotkeys import _kglobalaccel_available as available
+
+    return available()
+
+
+def _gnome_keys_available() -> bool:
+    """Признак возможности записать пользовательские комбинации GNOME."""
+    from backends.wayland import gnome_keys
+
+    return gnome_keys.available()
 
 
 def self_test() -> int:
