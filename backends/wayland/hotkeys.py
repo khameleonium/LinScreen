@@ -148,9 +148,8 @@ def key_code(combination: str) -> int:
     sequence = QKeySequence(combination)
     if sequence.isEmpty():
         return 0
-    # Заглушки типов не описывают индексирование последовательности,
-    # хотя сама библиотека его поддерживает.
-    return int(sequence[0].toCombined())  # type: ignore[index]
+    # Первое сочетание последовательности — код клавиши с модификаторами.
+    return int(sequence[0].toCombined())
 
 
 def kwin_variants(code: int) -> list[int]:

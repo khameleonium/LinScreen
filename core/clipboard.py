@@ -36,9 +36,8 @@ def encode_png(image: QImage) -> bytes:
     data = QByteArray()
     buffer = QBuffer(data)
     buffer.open(QIODevice.OpenModeFlag.WriteOnly)
-    # Формат передаётся строкой: заглушки типов PySide6 объявляют байты,
-    # но сама библиотека такое значение отвергает.
-    image.save(buffer, "PNG", 100)  # type: ignore[call-overload]
+    # Формат передаётся строкой: значение в байтах библиотека отвергает.
+    image.save(buffer, "PNG", 100)
     buffer.close()
     return bytes(data.data())
 

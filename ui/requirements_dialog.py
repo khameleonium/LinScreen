@@ -202,7 +202,7 @@ class RequirementsDialog(QDialog):
 
     def _on_finished(self, process: QProcess, code: int) -> None:
         """Завершение команды."""
-        if process is not self._process:
+        if self._process is None or process is not self._process:
             return
         if code != 0:
             self._failed = True
@@ -217,7 +217,9 @@ class RequirementsDialog(QDialog):
 
     def _on_error(self, process: QProcess) -> None:
         """Команду не удалось запустить."""
-        if process is not self._process or process.state() != QProcess.ProcessState.NotRunning:
+        if self._process is None or process is not self._process:
+            return
+        if process.state() != QProcess.ProcessState.NotRunning:
             return
         self._failed = True
         self._append(tr("Не удалось запустить команду."))

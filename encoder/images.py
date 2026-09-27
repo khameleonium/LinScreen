@@ -134,8 +134,7 @@ def image_to_png_bytes(image: QImage) -> bytes:
     buffer = QBuffer(payload)
     buffer.open(QIODevice.OpenModeFlag.WriteOnly)
     try:
-        # Подпись метода в стабах PySide6 не описывает запись в QIODevice.
-        if not image.save(buffer, "PNG"):  # type: ignore[call-overload]
+        if not image.save(buffer, "PNG"):
             raise ImageSaveError(tr("Не удалось закодировать изображение"))
     finally:
         buffer.close()
