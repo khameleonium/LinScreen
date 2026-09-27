@@ -183,8 +183,8 @@ class TrayIcon(QObject):
         self._stop_action = self._add_action(tr("Остановить запись"), self.stopRequested.emit)
 
         self._menu.addSeparator()
-        self._add_action(tr("Папка со снимками"), self.openImagesFolderRequested.emit)
-        self._add_action(tr("Папка с записями"), self.openVideosFolderRequested.emit)
+        self._add_action(tr("Открыть скриншоты"), self.openImagesFolderRequested.emit)
+        self._add_action(tr("Открыть видеозаписи"), self.openVideosFolderRequested.emit)
         self._add_action(tr("Журнал…"), self.logRequested.emit)
         self._add_action(tr("Настройки…"), self.settingsRequested.emit)
         self._add_action(tr("Компоненты системы…"), self.systemCheckRequested.emit)
